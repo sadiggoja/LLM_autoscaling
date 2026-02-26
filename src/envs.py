@@ -2,6 +2,7 @@ import numpy as np
 from gymnasium import Env, spaces
 
 from pod_controller import patch_pod
+from deployment_controller import scale_deployment, get_deployment_replicas, get_deployment_avg_cpu
 from utils import init_nodes, load_config
 
 
@@ -325,3 +326,210 @@ def set_other_utilization(env, other_envs):
 
 def set_other_priorities(env, other_envs):
     env.other_priorities = np.mean([o_env.priority for o_env in other_envs])
+
+
+class BaseJointElasticityEnv(BaseElasticityEnv):
+    '''
+    Base environment for joint HPA+VPA autoscaling.
+    Extends the state with replica count, avg CPU across replicas, and request rate estimate.
+    VPA executes every step; HPA only executes when cooldown has elapsed.
+    '''
+    def __init__(self, id, independent_state=False, pod_name=None):
+        config = load_config()
+        self.max_replicas = config.get('max_replicas', 5)
+        self.min_replicas = config.get('min_replicas', 1)
+        self.hpa_cooldown_steps = config.get('hpa_cooldown_steps', 30)
+        self.target_deployment = config.get('target_deployment', 'localization-api')
+        self.replica_change_penalty = config.get('replica_change_penalty', 0.3)
+
+        super().__init__(id, independent_state=independent_state, pod_name=pod_name)
+
+        # HPA state
+        self.current_replicas = get_deployment_replicas(
+            self.target_deployment, debug=self.debug_deployment) or 2
+        self.hpa_cooldown_counter = 0
+        self.previous_replicas = self.current_replicas
+
+        # Request rate tracking (from network RX delta)
+        self.last_network_rx = 0.0
+        self.request_rate_estimate = 0.0
+
+        # Override state FIFO with 10 dimensions (or 8 if independent)
+        if self.independent_state:
+            self.states_fifo = [[0] * 8 for _ in range(self.STATE_LENTGH)]
+        else:
+            self.states_fifo = [[0] * 10 for _ in range(self.STATE_LENTGH)]
+
+        # Re-initialize observation space with new state dimensions
+        self.state = self.get_current_usage()
+        self.observation_space = spaces.Box(low=np.float32(0), high=np.float32(1),
+                                            shape=(self.STATE_LENTGH * len(self.state[0]),))
+
+    def get_current_usage(self):
+        (cpu_limit, cpu, cpu_percentage), (_, _, _), (network_rx, _), _ = self.node.get_container_usage(
+            self.container_id)
+        self.previous_cpu_percentage = self.last_cpu_percentage
+        self.last_cpu_percentage = cpu_percentage
+        n_cpu_limit, n_cpu = self.norm_cpu(cpu_limit), self.norm_cpu(cpu)
+
+        available_normed = self.norm_cpu(self.AVAILABLE)
+
+        # Request rate estimate from network RX delta
+        self.request_rate_estimate = max(0, network_rx - self.last_network_rx)
+        self.last_network_rx = network_rx
+
+        # Normalized replica info
+        replica_norm = self.current_replicas / self.max_replicas
+        avg_cpu_replicas = get_deployment_avg_cpu(
+            self.target_deployment, [self.node], debug=self.debug_deployment) / 100.0
+
+        if self.independent_state:
+            state = [n_cpu_limit, n_cpu, available_normed, cpu_percentage / 100, self.priority,
+                     replica_norm, avg_cpu_replicas, min(self.request_rate_estimate, 1.0)]
+        else:
+            state = [n_cpu_limit, n_cpu, available_normed, cpu_percentage / 100, self.other_util / 100,
+                     self.priority, self.other_priorities,
+                     replica_norm, avg_cpu_replicas, min(self.request_rate_estimate, 1.0)]
+
+        self.states_fifo.append(state)
+        self.states_fifo.pop(0)
+        return self.states_fifo
+
+    def apply_hpa_action(self, hpa_action_value):
+        '''Apply HPA action. Returns penalty if on cooldown.'''
+        self.hpa_cooldown_counter += 1
+        penalty = 0.0
+
+        if hpa_action_value == 0:
+            return penalty  # no-op
+
+        if self.hpa_cooldown_counter < self.hpa_cooldown_steps:
+            # Attempted HPA during cooldown
+            penalty = -0.1
+            return penalty
+
+        # Cooldown elapsed, apply HPA
+        self.hpa_cooldown_counter = 0
+        self.previous_replicas = self.current_replicas
+        new_replicas = int(np.clip(
+            self.current_replicas + hpa_action_value,
+            self.min_replicas, self.max_replicas))
+
+        if new_replicas != self.current_replicas:
+            scale_deployment(self.target_deployment, new_replicas, debug=self.debug_deployment)
+            penalty = -self.replica_change_penalty * abs(new_replicas - self.current_replicas)
+            self.current_replicas = new_replicas
+
+        return penalty
+
+    def calculate_joint_reward(self, rf, hpa_penalty):
+        base_reward = self.calculate_agent_reward(rf)
+        # Efficiency bonus: reward high per-replica utilization
+        if self.current_replicas > 0:
+            avg_util = get_deployment_avg_cpu(
+                self.target_deployment, [self.node], debug=self.debug_deployment)
+            if self.LOWER_CPU <= avg_util <= self.UPPER_CPU:
+                efficiency_bonus = 0.2
+            else:
+                efficiency_bonus = 0.0
+        else:
+            efficiency_bonus = 0.0
+
+        return base_reward + hpa_penalty + efficiency_bonus
+
+
+class JointDiscreteElasticityEnv(BaseJointElasticityEnv):
+    '''
+    Joint HPA+VPA with Discrete(9) action space: 3 VPA actions x 3 HPA actions.
+    VPA: {decrease, maintain, increase} x HPA: {scale-down, maintain, scale-up}
+    '''
+    def __init__(self, id, independent_state=False, pod_name=None):
+        super().__init__(id, independent_state=independent_state, pod_name=pod_name)
+        self.action_space = spaces.Discrete(9)
+
+    def _decode_action(self, action):
+        '''Decode flat action index into (vpa_action, hpa_action).
+        VPA: 0=decrease, 1=maintain, 2=increase
+        HPA: 0=scale-down, 1=maintain, 2=scale-up
+        '''
+        vpa_action = action % 3
+        hpa_action = action // 3
+        return vpa_action, hpa_action
+
+    def step(self, action, rf):
+        vpa_action, hpa_action = self._decode_action(action)
+
+        # VPA: execute every step
+        if vpa_action == 0:
+            self._decrease_resources()
+        elif vpa_action == 2:
+            self._increase_resources()
+
+        # HPA: map to delta (-1, 0, +1)
+        hpa_delta = hpa_action - 1
+        hpa_penalty = self.apply_hpa_action(hpa_delta)
+
+        self.state = self.get_current_usage()
+        reward = self.calculate_joint_reward(rf, hpa_penalty)
+
+        self.steps += 1
+        done = self.steps >= self.MAX_STEPS
+
+        return self.state, reward, done, {}
+
+    def _increase_resources(self):
+        updated_cpu_limit = int(
+            max(min(self.ALLOCATED + self.INCREMENT, self.ALLOCATED + self.AVAILABLE), self.MIN_CPU_LIMIT))
+        if updated_cpu_limit != self.ALLOCATED:
+            self.ALLOCATED = updated_cpu_limit
+            patch_pod(self.pod_name, cpu_request=f"{updated_cpu_limit}m", cpu_limit=f"{updated_cpu_limit}m",
+                      container_name=self.container_name, debug=self.debug_deployment)
+            self.cummulative_delta += self.INCREMENT
+
+    def _decrease_resources(self):
+        updated_cpu_limit = int(max(self.ALLOCATED - self.INCREMENT, self.MIN_CPU_LIMIT))
+        if updated_cpu_limit != self.ALLOCATED:
+            self.ALLOCATED = updated_cpu_limit
+            patch_pod(self.pod_name, cpu_request=f"{updated_cpu_limit}m", cpu_limit=f"{updated_cpu_limit}m",
+                      container_name=self.container_name, debug=self.debug_deployment)
+            self.cummulative_delta += self.INCREMENT
+
+
+class JointContinuousElasticityEnv(BaseJointElasticityEnv):
+    '''
+    Joint HPA+VPA with continuous action space Box([-1,-1],[1,1]) shape (2,).
+    action[0] = VPA (CPU scaling), action[1] = HPA (replica scaling).
+    '''
+    def __init__(self, id, independent_state=False, pod_name=None):
+        super().__init__(id, independent_state=independent_state, pod_name=pod_name)
+        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+
+    def step(self, action, rf):
+        action = np.clip(action, self.action_space.low, self.action_space.high)
+        vpa_action, hpa_action = action[0], action[1]
+
+        # VPA: scale CPU
+        scale_action = vpa_action * self.scale_action
+        if scale_action <= max(self.AVAILABLE, 0):
+            new_resource_limit = int(max(self.ALLOCATED + scale_action, self.MIN_CPU_LIMIT))
+            if new_resource_limit != self.ALLOCATED:
+                self.ALLOCATED = new_resource_limit
+                patch_pod(self.pod_name, cpu_request=f"{new_resource_limit}m",
+                          cpu_limit=f"{new_resource_limit}m",
+                          container_name=self.container_name, debug=self.debug_deployment)
+                self.cummulative_delta += abs(scale_action)
+
+        # HPA: discretize continuous action to replica delta
+        if abs(hpa_action) > 0.33:
+            hpa_delta = int(np.sign(hpa_action) * max(1, int(abs(hpa_action) * 2)))
+        else:
+            hpa_delta = 0
+        hpa_penalty = self.apply_hpa_action(hpa_delta)
+
+        self.state = self.get_current_usage()
+        reward = self.calculate_joint_reward(rf, hpa_penalty)
+
+        self.steps += 1
+        done = self.steps >= self.MAX_STEPS
+
+        return self.state, reward, done, {}

@@ -12,5 +12,7 @@ scipy
 tqdm
 kubernetes
 uvicorn
+anthropic>=0.39.0
+pyyaml
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch

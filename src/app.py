@@ -3,6 +3,7 @@ import time
 import threading
 import pickle
 import gc
+from concurrent.futures import ThreadPoolExecutor
 
 from kubernetes import client, config, watch
 
@@ -47,6 +48,7 @@ class Application:
             f"Target App Label: {self.target_app_label}, Target Container Name: {self.target_container_name}"
         )
         self.envs, self.other_envs, self.agents = [], [], []
+        self.parallel_inference = False  # Enable for 10+ agents
 
     def _update_other_envs(self):
         if not self.envs:
@@ -56,6 +58,14 @@ class Application:
             for i in range(len(self.envs))
         ]
 
+    def _infer_single_agent(self, i, state):
+        """Infer action for a single agent (for parallel execution)."""
+        action = self.agents[i].get_action(state)
+        set_other_utilization(self.envs[i], self.other_envs[i])
+        set_other_priorities(self.envs[i], self.other_envs[i])
+        new_state, reward, done, _ = self.envs[i].step(action, 2)
+        return i, action, np.array(new_state).flatten(), reward, done
+
     def infer_mdqn(self):
         states = [np.array(env.reset()).flatten() for env in self.envs]
         while not self.stop_signal.is_set():
@@ -64,30 +74,56 @@ class Application:
                     states.append(np.array(self.envs[-1].reset()).flatten())
 
             start_time = time.time()
-            actions = []
-            with self.lock:
-                for state, agent in zip(states, self.agents):
-                    actions.append(agent.get_action(state))
-            # actions = [agent.get_action(state) for state, agent in zip(states, self.agents)]
-            states, rewards, dones, _ = [], [], [], []
-            for i, action in enumerate(actions):
-                with self.lock:
-                    if i >= len(self.envs) or i >= len(self.other_envs):
-                        continue  # Skip if index is out of range
-                    set_other_utilization(self.envs[i], self.other_envs[i])
-                    set_other_priorities(self.envs[i], self.other_envs[i])
 
-                    state, reward, done, _ = self.envs[i].step(action, 2)
+            if self.parallel_inference and len(self.agents) > 5:
+                # Parallel inference for scale (10-20+ agents)
+                with self.lock:
+                    n = min(len(states), len(self.agents), len(self.envs))
+                with ThreadPoolExecutor(max_workers=min(n, 8)) as executor:
+                    futures = [executor.submit(self._infer_single_agent, i, states[i]) for i in range(n)]
+                    results = [f.result() for f in futures]
+
+                with self.lock:
                     set_available_resource(self.envs, self.resources)
-                    states.append(np.array(state).flatten())
+
+                new_states, rewards, dones = [], [], []
+                for i, action, new_state, reward, done in sorted(results, key=lambda x: x[0]):
+                    new_states.append(new_state)
                     rewards.append(reward)
                     dones.append(done)
                     if self.debug:
                         print(
                             f"{self.envs[i].pod_name}: ACTION: {action}, LIMIT: {self.envs[i].ALLOCATED}, "
                             f"{self.envs[i].last_cpu_percentage: .2f}%, AVAILABLE: {self.envs[i].AVAILABLE}, "
-                            f"reward: {reward} state(limit, usage, others): {self.envs[i].state[-1]}"
+                            f"reward: {reward}"
                         )
+                states = new_states
+            else:
+                # Sequential inference (original behavior)
+                actions = []
+                with self.lock:
+                    for state, agent in zip(states, self.agents):
+                        actions.append(agent.get_action(state))
+                states, rewards, dones, _ = [], [], [], []
+                for i, action in enumerate(actions):
+                    with self.lock:
+                        if i >= len(self.envs) or i >= len(self.other_envs):
+                            continue
+                        set_other_utilization(self.envs[i], self.other_envs[i])
+                        set_other_priorities(self.envs[i], self.other_envs[i])
+
+                        state, reward, done, _ = self.envs[i].step(action, 2)
+                        set_available_resource(self.envs, self.resources)
+                        states.append(np.array(state).flatten())
+                        rewards.append(reward)
+                        dones.append(done)
+                        if self.debug:
+                            print(
+                                f"{self.envs[i].pod_name}: ACTION: {action}, LIMIT: {self.envs[i].ALLOCATED}, "
+                                f"{self.envs[i].last_cpu_percentage: .2f}%, AVAILABLE: {self.envs[i].AVAILABLE}, "
+                                f"reward: {reward} state(limit, usage, others): {self.envs[i].state[-1]}"
+                            )
+
             if self.debug:
                 print()
 
@@ -147,7 +183,8 @@ class Application:
         if self.debug:
             print(f"Setting algorithm to {algorithm}")
 
-        if algorithm not in ["dqn", "ppo", "ddpg"]:
+        if algorithm not in ["dqn", "ppo", "ddpg", "joint_ppo", "joint_ddpg", "joint_dqn",
+                              "llm_claude", "llm_llama"]:
             return {"message": "Invalid algorithm"}
 
         if self.current_algorithm == algorithm:
@@ -195,6 +232,48 @@ class Application:
                     tl_agent=0,
                     model="trained/ddpg/1000ep_2rf_20rps5.0alpha_50scale1000resources",
                     algorithm="ddpg",
+                    independent=False,
+                    priority=1.0,
+                    pod_name=pod_name,
+                )
+            case "joint_ppo":
+                new_env, new_agent = initialize_agent(
+                    id=len(self.envs) + 1,
+                    resources=1000,
+                    tl_agent=0,
+                    model="trained/ppo/1000ep_rf_2_20rps10kepochs5alpha10epupdate50scale_a_1000resources",
+                    algorithm="joint_ppo",
+                    independent=False,
+                    priority=1.0,
+                    pod_name=pod_name,
+                )
+            case "joint_ddpg":
+                new_env, new_agent = initialize_agent(
+                    id=len(self.envs) + 1,
+                    resources=1000,
+                    tl_agent=0,
+                    model="trained/ddpg/1000ep_2rf_20rps5.0alpha_50scale1000resources",
+                    algorithm="joint_ddpg",
+                    independent=False,
+                    priority=1.0,
+                    pod_name=pod_name,
+                )
+            case "joint_dqn":
+                new_env, new_agent = initialize_agent(
+                    id=len(self.envs) + 1,
+                    resources=1000,
+                    tl_agent=2,
+                    model="trained/dqn/mdqn1000ep1000m25inc2_rf_20rps5.0alpha1000res",
+                    algorithm="joint_dqn",
+                    independent=False,
+                    priority=1.0,
+                    pod_name=pod_name,
+                )
+            case "llm_claude" | "llm_llama":
+                new_env, new_agent = initialize_agent(
+                    id=len(self.envs) + 1,
+                    resources=1000,
+                    algorithm=self.current_algorithm,
                     independent=False,
                     priority=1.0,
                     pod_name=pod_name,
@@ -383,6 +462,31 @@ def set_ppo():
 @elasticity_app.post("/set_ddpg_algorithm")
 def set_ddpg():
     return app.set_algorithm("ddpg")
+
+
+@elasticity_app.post("/set_joint_ppo_algorithm")
+def set_joint_ppo():
+    return app.set_algorithm("joint_ppo")
+
+
+@elasticity_app.post("/set_joint_ddpg_algorithm")
+def set_joint_ddpg():
+    return app.set_algorithm("joint_ddpg")
+
+
+@elasticity_app.post("/set_joint_dqn_algorithm")
+def set_joint_dqn():
+    return app.set_algorithm("joint_dqn")
+
+
+@elasticity_app.post("/set_llm_claude_algorithm")
+def set_llm_claude():
+    return app.set_algorithm("llm_claude")
+
+
+@elasticity_app.post("/set_llm_llama_algorithm")
+def set_llm_llama():
+    return app.set_algorithm("llm_llama")
 
 
 @elasticity_app.post("/set_default_limits")

@@ -14,7 +14,8 @@ import torch.nn.functional as F
 import torch.optim as optim
 from tqdm import tqdm
 
-from envs import (DiscreteElasticityEnv, FiveDiscreteElasticityEnv, ElevenDiscrElasticityEnv, 
+from envs import (DiscreteElasticityEnv, FiveDiscreteElasticityEnv, ElevenDiscrElasticityEnv,
+                  JointDiscreteElasticityEnv,
                   set_available_resource, set_other_priorities, set_other_utilization)
 from pod_controller import set_container_cpu_values, get_loadbalancer_external_port
 from spam_cluster import get_response_times
@@ -210,6 +211,7 @@ if __name__ == '__main__':
     parser.add_argument('--debug', action='store_true', default=False, help="Debug mode")
     parser.add_argument('--five', action='store_true', default=False, help="Five actions for dqn")
     parser.add_argument('--eleven', action='store_true', default=False, help="Eleven actions for dqn")
+    parser.add_argument('--joint', action='store_true', default=False, help="Use joint HPA+VPA environment (9 actions)")
     parser.add_argument('--reset_env', action='store_true', default=False, help="Resetting the env every 10th episode")
     args = parser.parse_args()
 
@@ -230,6 +232,7 @@ if __name__ == '__main__':
 
     five_actions_env = args.five
     eleven_actions_env = args.eleven
+    joint = args.joint
 
     MEMORY_SIZE = 1000
     EPISODES = args.episodes
@@ -254,6 +257,8 @@ if __name__ == '__main__':
     MODEL += ''.join(suffixes)
     if independent_state:
         MODEL += "_independent_state"
+    if joint:
+        MODEL += "_joint"
     if five_actions_env:
         MODEL += "_five_actions"
     if eleven_actions_env:
@@ -266,7 +271,9 @@ if __name__ == '__main__':
 
     n_agents = args.n_agents
 
-    if five_actions_env:
+    if joint:
+        envs = [JointDiscreteElasticityEnv(i, independent_state=independent_state) for i in range(1, n_agents + 1)]
+    elif five_actions_env:
         envs = [FiveDiscreteElasticityEnv(i, independent_state=independent_state) for i in range(1, n_agents + 1)]
     elif eleven_actions_env:
         envs = [ElevenDiscrElasticityEnv(i, independent_state=independent_state) for i in range(1, n_agents + 1)]

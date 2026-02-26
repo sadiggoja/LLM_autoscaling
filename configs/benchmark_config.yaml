@@ -1,0 +1,65 @@
+# Benchmark Configuration
+
+# Algorithms to benchmark
+algorithms:
+  - name: "joint_ppo"
+    type: "rl"
+    model_path: "trained/ppo/1000ep_rf_2_20rps10kepochs5alpha10epupdate50scale_a_1000resources"
+  - name: "joint_ddpg"
+    type: "rl"
+    model_path: "trained/ddpg/1000ep_2rf_20rps5.0alpha_50scale1000resources"
+  - name: "joint_dqn"
+    type: "rl"
+    model_path: "trained/dqn/mdqn1000ep1000m25inc2_rf_20rps5.0alpha1000res"
+  - name: "llm_claude"
+    type: "llm"
+  - name: "llm_llama"
+    type: "llm"
+  - name: "threshold"
+    type: "heuristic"
+  - name: "k8s_hpa"
+    type: "heuristic"
+
+# General settings
+iterations: 3
+action_interval: 1.0
+resources: 1000
+steps_per_phase: 60
+
+# Load patterns (phases within a single benchmark run)
+load_patterns:
+  - name: "low"
+    rps: 10
+    duration_steps: 60
+  - name: "medium"
+    rps: 30
+    duration_steps: 60
+  - name: "high"
+    rps: 50
+    duration_steps: 60
+  - name: "spike"
+    rps: 80
+    duration_steps: 30
+  - name: "cooldown"
+    rps: 10
+    duration_steps: 30
+
+# Scalability scenarios
+scenarios:
+  small:
+    service_count: 3
+    total_resources: 1000
+  medium:
+    service_count: 10
+    total_resources: 3000
+  large:
+    service_count: 20
+    total_resources: 6000
+
+# Metrics collection
+metrics:
+  sla_threshold_ms: 250
+  collection_interval: 1.0
+
+# Output
+output_dir: "results/benchmark"

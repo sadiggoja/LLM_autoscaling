@@ -3,12 +3,15 @@ import time
 
 import numpy as np
 
-from envs import (ContinuousElasticityEnv, DiscreteElasticityEnv, InstantContinuousElasticityEnv, 
+from envs import (ContinuousElasticityEnv, DiscreteElasticityEnv, InstantContinuousElasticityEnv,
+                  JointDiscreteElasticityEnv, JointContinuousElasticityEnv,
                   set_available_resource, set_other_priorities, set_other_utilization,
                   FiveDiscreteElasticityEnv, ElevenDiscrElasticityEnv)
 from train_ddpg import DDPGagent
 from train_mdqn import DQNAgent
 from train_ppo import PPO
+from llm_agent import LLMAgent, load_llm_config
+from llm_providers import AnthropicProvider, OllamaProvider
 
 
 def initialize_agent(id=None, resources=1000, tl_agent=None, model=None, algorithm='ppo', independent=False,
@@ -34,37 +37,75 @@ def initialize_agent(id=None, resources=1000, tl_agent=None, model=None, algorit
         case 'ppo' | 'ddpg':
             instant = False
             discrete = False
+            joint = False
         case 'ippo' | 'iddpg':
             instant = True
             discrete = False
+            joint = False
         case 'mdqn' | 'dmdqn' | 'ddmdqn' | 'dppo':
             instant = False
             discrete = True
+            joint = False
+        case 'joint_ppo' | 'joint_ddpg':
+            instant = False
+            discrete = False
+            joint = True
+        case 'joint_dqn':
+            instant = False
+            discrete = True
+            joint = True
+        case 'llm_claude' | 'llm_llama':
+            instant = False
+            discrete = False
+            joint = True
         case _:
             raise ValueError("Invalid algorithm")
 
-    if discrete:
-        env = DiscreteElasticityEnv(id, independent_state=independent, pod_name=pod_name)
-    else:
-        if instant:
-            env = InstantContinuousElasticityEnv(id, independent_state=independent, pod_name=pod_name)
+    # LLM agents use joint continuous envs
+    if algorithm in ('llm_claude', 'llm_llama'):
+        env = JointContinuousElasticityEnv(id, independent_state=independent, pod_name=pod_name)
+        llm_config = load_llm_config()
+        deployment_name = llm_config.get('agent', {}).get('deployment_name', 'localization-api')
+        history_window = llm_config.get('agent', {}).get('history_window', 5)
+        if algorithm == 'llm_claude':
+            cfg = llm_config.get('anthropic', {})
+            provider = AnthropicProvider(model=cfg.get('model', 'claude-sonnet-4-20250514'),
+                                        max_tokens=cfg.get('max_tokens', 512))
         else:
-            env = ContinuousElasticityEnv(id, independent_state=independent, pod_name=pod_name)
-
-    match algorithm:
-        case 'ppo' | 'dppo' | 'ippo':
-            agent = PPO(env, has_continuous_action_space=not discrete, action_std_init=1e-10, sigmoid_output=instant)
-        case 'mdqn' | 'dmdqn':
-            agent = DQNAgent(env)
-        case 'ddmdqn':
-            agent = DQNAgent(env, dueling=True)
-        case 'ddpg' | 'iddpg':
-            agent = DDPGagent(env, hidden_size=64, sigmoid_output=instant)
-
-    if isinstance(tl_agent, int):
-        agent.load(model, agent_id=tl_agent)
+            cfg = llm_config.get('ollama', {})
+            provider = OllamaProvider(model=cfg.get('model', 'llama3.1:8b'),
+                                      base_url=cfg.get('base_url', 'http://localhost:11434'),
+                                      max_tokens=cfg.get('max_tokens', 512))
+        agent = LLMAgent(provider, pod_name=pod_name or f'localization-api{id}',
+                         deployment_name=deployment_name, history_window=history_window)
     else:
-        agent.load(model, agent_id=id)
+        if joint:
+            if discrete:
+                env = JointDiscreteElasticityEnv(id, independent_state=independent, pod_name=pod_name)
+            else:
+                env = JointContinuousElasticityEnv(id, independent_state=independent, pod_name=pod_name)
+        elif discrete:
+            env = DiscreteElasticityEnv(id, independent_state=independent, pod_name=pod_name)
+        else:
+            if instant:
+                env = InstantContinuousElasticityEnv(id, independent_state=independent, pod_name=pod_name)
+            else:
+                env = ContinuousElasticityEnv(id, independent_state=independent, pod_name=pod_name)
+
+        match algorithm:
+            case 'ppo' | 'dppo' | 'ippo' | 'joint_ppo':
+                agent = PPO(env, has_continuous_action_space=not discrete, action_std_init=1e-10, sigmoid_output=instant)
+            case 'mdqn' | 'dmdqn' | 'joint_dqn':
+                agent = DQNAgent(env)
+            case 'ddmdqn':
+                agent = DQNAgent(env, dueling=True)
+            case 'ddpg' | 'iddpg' | 'joint_ddpg':
+                agent = DDPGagent(env, hidden_size=64, sigmoid_output=instant)
+
+        if isinstance(tl_agent, int):
+            agent.load(model, agent_id=tl_agent)
+        else:
+            agent.load(model, agent_id=id)
 
     env.MAX_CPU_LIMIT = resources
     env.priority = priority

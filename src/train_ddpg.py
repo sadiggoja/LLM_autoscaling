@@ -15,8 +15,8 @@ import torch.optim as optim
 from torch.autograd import Variable
 from tqdm import tqdm
 
-from envs import (ContinuousElasticityEnv, InstantContinuousElasticityEnv, set_other_utilization, 
-                  set_other_priorities, set_available_resource)
+from envs import (ContinuousElasticityEnv, InstantContinuousElasticityEnv, JointContinuousElasticityEnv,
+                  set_other_utilization, set_other_priorities, set_available_resource)
 from pod_controller import set_container_cpu_values, get_loadbalancer_external_port
 from spam_cluster import get_response_times
 from utils import save_training_data
@@ -258,6 +258,7 @@ if __name__ == "__main__":
     parser.add_argument('--old_reward', action='store_true', default=False, help="Use the old reward function")
     parser.add_argument('--instant', action='store_true', default=False,
                         help="Use instant scaling elasticity environemnt")
+    parser.add_argument('--joint', action='store_true', default=False, help="Use joint HPA+VPA environment")
     parser.add_argument('--reset_env', action='store_true', default=False, help="Resetting the env every 10th episode")
     args = parser.parse_args()
 
@@ -278,6 +279,7 @@ if __name__ == "__main__":
     make_checkpoints = args.make_checkpoints
     old_reward = args.old_reward
     instant = args.instant
+    joint = args.joint
     independent_state = args.independent_state
     priority = args.priority
     reset_env = args.reset_env
@@ -288,7 +290,9 @@ if __name__ == "__main__":
     # url = f"http://localhost:30888/predict"
     USERS = 1
 
-    if instant:
+    if joint:
+        envs = [JointContinuousElasticityEnv(i, independent_state=independent_state) for i in range(1, n_agents + 1)]
+    elif instant:
         envs = [InstantContinuousElasticityEnv(i, independent_state=independent_state) for i in range(1, n_agents + 1)]
     else:
         envs = [ContinuousElasticityEnv(i, independent_state=independent_state) for i in range(1, n_agents + 1)]
@@ -325,6 +329,8 @@ if __name__ == "__main__":
     parent_dir = 'src/model_metric_data/ddpg'
     # parent_dir = 'src/model_metric_data/ddpg_j_experiments'
     MODEL = f'{episodes}ep_2rf_{reqs_per_second}rps{ALPHA_CONSTANT}alpha'
+    if joint:
+        MODEL += '_joint'
     if instant:
         MODEL += '_instant'
     else:

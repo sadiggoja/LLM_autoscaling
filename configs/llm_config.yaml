@@ -1,0 +1,18 @@
+# LLM Agent Configuration
+
+# Anthropic Claude settings
+anthropic:
+  model: "claude-sonnet-4-20250514"
+  max_tokens: 512
+
+# Ollama local model settings
+ollama:
+  model: "llama3.1:8b"
+  base_url: "http://localhost:11434"
+  max_tokens: 512
+
+# Agent settings
+agent:
+  history_window: 5          # Number of recent decisions to include as context
+  action_timeout_ms: 3000    # Timeout before reusing previous action
+  deployment_name: "localization-api"

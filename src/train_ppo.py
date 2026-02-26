@@ -13,6 +13,7 @@ from torch.distributions import Categorical, MultivariateNormal
 from tqdm import tqdm
 
 from envs import (ContinuousElasticityEnv, DiscreteElasticityEnv, InstantContinuousElasticityEnv,
+                  JointDiscreteElasticityEnv, JointContinuousElasticityEnv,
                   set_available_resource, set_other_priorities, set_other_utilization)
 from pod_controller import set_container_cpu_values, get_loadbalancer_external_port
 from spam_cluster import get_response_times
@@ -339,6 +340,7 @@ if __name__ == "__main__":
                         help="Random choice of [500, 750, 1000, 1250, 1500, 1750, 2000] resource every 5th episode")
     parser.add_argument('--discrete', action='store_true', default=False, help="Use discrete actions")
     parser.add_argument('--instant', action='store_true', default=False, help="Scale directly to value")
+    parser.add_argument('--joint', action='store_true', default=False, help="Use joint HPA+VPA environment")
 
     parser.add_argument('--reset_env', action='store_true', default=False, help="Resetting the env every 10th episode")
     args = parser.parse_args()
@@ -358,6 +360,7 @@ if __name__ == "__main__":
     min_rps = args.min_rps
     make_checkpoints = args.make_checkpoints
     discrete = args.discrete
+    joint = args.joint
     reward_function = args.reward_function
     k_epochs = args.k_epochs
     instant = args.instant
@@ -371,7 +374,14 @@ if __name__ == "__main__":
     # Maybe change it later on to get "truer" response times, but 1 is set for faster training
     USERS = 1
 
-    if discrete:
+    if joint:
+        if discrete:
+            envs = [JointDiscreteElasticityEnv(i, independent_state) for i in range(1, n_agents + 1)]
+        else:
+            envs = [JointContinuousElasticityEnv(i, independent_state) for i in range(1, n_agents + 1)]
+            for env in envs:
+                env.scale_action = scale_action
+    elif discrete:
         envs = [DiscreteElasticityEnv(i, independent_state) for i in range(1, n_agents + 1)]
         increment_action = 25
         for env in envs:
@@ -437,6 +447,8 @@ if __name__ == "__main__":
         MODEL += f'_{priority}priority'
     if independent_state:
         MODEL += "_independent_state"
+    if joint:
+        MODEL += '_joint'
     if discrete:
         MODEL += '_discrete'
     if instant:

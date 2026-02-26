@@ -10,3 +10,10 @@ max_steps: 60
 scale_action: 50
 discrete_increment: 25
 state_history: 6
+
+# Joint HPA+VPA settings
+max_replicas: 5
+min_replicas: 1
+hpa_cooldown_steps: 30
+target_deployment: "localization-api"
+replica_change_penalty: 0.3
