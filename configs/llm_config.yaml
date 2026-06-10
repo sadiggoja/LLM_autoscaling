@@ -1,14 +1,16 @@
 # LLM Agent Configuration
+#
+# Model names live in configs/benchmark_config.yaml (one entry per model under
+# the `llm` algorithm). This file only holds connection/runtime settings that
+# are shared across all models served by a given provider.
 
-# Anthropic Claude settings
+# Anthropic Claude — shared request settings
 anthropic:
-  model: "claude-sonnet-4-20250514"
   max_tokens: 512
 
-# Ollama local model settings
+# Ollama — connection endpoint + shared request settings
 ollama:
-  model: "llama3.1:8b"
-  base_url: "http://localhost:11434"
+  base_url: "http://100.119.227.36:11434"
   max_tokens: 512
 
 # Agent settings
@@ -16,3 +18,16 @@ agent:
   history_window: 5          # Number of recent decisions to include as context
   action_timeout_ms: 3000    # Timeout before reusing previous action
   deployment_name: "localization-api"
+  # Inference mode:
+  #   "function_calling" — send tool definitions to the LLM and expect structured
+  #                        tool-call responses (best with Claude / capable models)
+  #   "parser"           — send no tools; ask for plain-text response ending with
+  #                        an explicit call like scale_cpu(50) and parse it with regex
+  #                        (better for weaker models that ignore tool schemas)
+  inference_mode: "parser"
+  # Action mode — which scaling levers the LLM is allowed to use:
+  #   "vpa"  — vertical only (scale_cpu / no_action). Replica count is frozen.
+  #   "hpa"  — horizontal only (scale_replicas / no_action). CPU limit is frozen.
+  #   "both" — full action space (current behavior).
+  # Can be overridden per-algorithm in benchmark_config.yaml via `action_mode:`.
+  action_mode: "both"

@@ -2,7 +2,7 @@ import numpy as np
 from gymnasium import Env, spaces
 
 from pod_controller import patch_pod
-from deployment_controller import scale_deployment, get_deployment_replicas, get_deployment_avg_cpu
+from deployment_controller import scale_deployment, get_deployment_replicas, get_deployment_avg_cpu, resolve_pod_name
 from utils import init_nodes, load_config
 
 
@@ -25,6 +25,8 @@ class BaseElasticityEnv(Env):
             self.pod_name = pod_name
         else:
             self.pod_name = f'{self.container_name}{id}'
+        self.deployment_name = self.pod_name
+        self.pod_name = resolve_pod_name(self.deployment_name, debug=config['debug_deployment'])
 
         self.MAX_CPU_LIMIT = config['max_cpu']  # Dynamic, can change from outer scope
         self.MIN_CPU_LIMIT = config['min_cpu']
@@ -80,6 +82,35 @@ class BaseElasticityEnv(Env):
 
         # Field for evaluation of how much resources have been changed
         self.cummulative_delta = 0
+
+        # Patch debouncing: accumulate desired CPU deltas across steps and only call
+        # patch_pod when they cross MIN_PATCH_DELTA. Reduces endpoint-slice churn
+        # that triggers nginx-ingress 503 events.
+        self.MIN_PATCH_DELTA = config.get('min_patch_delta', 50)
+        self._pending_delta = 0
+
+    def _apply_delta(self, scale_action):
+        """Accumulate a desired CPU delta (millicores). Patch the pod only when
+        cumulative pending delta is >= MIN_PATCH_DELTA. Honours AVAILABLE and
+        MIN_CPU_LIMIT limits. Returns the actual delta applied (0 if accumulating)."""
+        self._pending_delta += scale_action
+        if abs(self._pending_delta) < self.MIN_PATCH_DELTA:
+            return 0
+        # Clip pending delta against headroom and floor
+        proposed = self.ALLOCATED + self._pending_delta
+        if self._pending_delta > 0:
+            cap = min(self.ALLOCATED + max(self.AVAILABLE, 0), self.MAX_CPU_LIMIT)
+            new_limit = int(max(min(proposed, cap), self.MIN_CPU_LIMIT))
+        else:
+            new_limit = int(max(proposed, self.MIN_CPU_LIMIT))
+        applied = new_limit - self.ALLOCATED
+        if new_limit != self.ALLOCATED:
+            patch_pod(self.pod_name, cpu_request=f"{new_limit}m", cpu_limit=f"{new_limit}m",
+                      container_name=self.container_name, debug=self.debug_deployment)
+            self.ALLOCATED = new_limit
+            self.cummulative_delta += abs(applied)
+        self._pending_delta = 0
+        return applied
 
     def norm_cpu(self, cpu_usage):
         return cpu_usage / self.MAX_CPU_LIMIT
@@ -219,23 +250,10 @@ class DiscreteElasticityEnv(BaseElasticityEnv):
         return self.state, reward, done, 0
 
     def increase_resources(self):
-        # cpu_limit, memory_limit = self.node.get_container_limits(self.container_id)
-        updated_cpu_limit = int(
-            max(min(self.ALLOCATED + self.INCREMENT, self.ALLOCATED + self.AVAILABLE), self.MIN_CPU_LIMIT))
-        if updated_cpu_limit != self.ALLOCATED:
-            self.ALLOCATED = updated_cpu_limit
-            patch_pod(self.pod_name, cpu_request=f"{updated_cpu_limit}m", cpu_limit=f"{updated_cpu_limit}m",
-                    container_name=self.container_name, debug=self.debug_deployment)
-            self.cummulative_delta += self.INCREMENT
+        self._apply_delta(self.INCREMENT)
 
     def decrease_resources(self):
-        # cpu_limit, memory_limit = self.node.get_container_limits(self.container_id)
-        updated_cpu_limit = int(max(self.ALLOCATED - self.INCREMENT, self.MIN_CPU_LIMIT))
-        if updated_cpu_limit != self.ALLOCATED:
-            self.ALLOCATED = updated_cpu_limit
-            patch_pod(self.pod_name, cpu_request=f"{updated_cpu_limit}m", cpu_limit=f"{updated_cpu_limit}m",
-                    container_name=self.container_name, debug=self.debug_deployment)
-            self.cummulative_delta += self.INCREMENT
+        self._apply_delta(-self.INCREMENT)
 
 
 class ContinuousElasticityEnv(BaseElasticityEnv):
@@ -252,14 +270,8 @@ class ContinuousElasticityEnv(BaseElasticityEnv):
 
         action = np.clip(action, self.action_space.low, self.action_space.high)
 
-        scale_action = action[0] * self.scale_action
-        if scale_action <= max(self.AVAILABLE, 0):  # If available is negative
-            new_resource_limit = int(max(self.ALLOCATED + scale_action, self.MIN_CPU_LIMIT))
-            if new_resource_limit != self.ALLOCATED:
-                self.ALLOCATED = new_resource_limit
-                patch_pod(self.pod_name, cpu_request=f"{new_resource_limit}m", cpu_limit=f"{new_resource_limit}m",
-                        container_name=self.container_name, debug=self.debug_deployment)
-                self.cummulative_delta += abs(scale_action.item())
+        scale_action = float(action[0]) * self.scale_action
+        self._apply_delta(scale_action)
 
         reward = self.calculate_agent_reward(rf)
 
@@ -321,11 +333,11 @@ def set_available_resource(envs, initial_resources):
 
 
 def set_other_utilization(env, other_envs):
-    env.other_util = np.mean([o_env.last_cpu_percentage for o_env in other_envs])
+    env.other_util = np.mean([o_env.last_cpu_percentage for o_env in other_envs]) if other_envs else 0.0
 
 
 def set_other_priorities(env, other_envs):
-    env.other_priorities = np.mean([o_env.priority for o_env in other_envs])
+    env.other_priorities = np.mean([o_env.priority for o_env in other_envs]) if other_envs else 0.0
 
 
 class BaseJointElasticityEnv(BaseElasticityEnv):
@@ -339,20 +351,25 @@ class BaseJointElasticityEnv(BaseElasticityEnv):
         self.max_replicas = config.get('max_replicas', 5)
         self.min_replicas = config.get('min_replicas', 1)
         self.hpa_cooldown_steps = config.get('hpa_cooldown_steps', 30)
-        self.target_deployment = config.get('target_deployment', 'localization-api')
+        from utils import get_deployment_name
+        self.target_deployment = pod_name if pod_name else get_deployment_name(id, config)
         self.replica_change_penalty = config.get('replica_change_penalty', 0.3)
+
+        # Initialize these BEFORE super().__init__() because it calls get_current_usage()
+        # which is overridden and references these attributes
+        self.last_network_rx = 0.0
+        self.request_rate_estimate = 0.0
+        self.current_replicas = 2  # Temporary default; updated below after super init
+        self.hpa_cooldown_counter = 0
+        self.previous_replicas = 2
+        self.last_avg_cpu_replicas = 0.0  # Cached to avoid duplicate cAdvisor calls
 
         super().__init__(id, independent_state=independent_state, pod_name=pod_name)
 
-        # HPA state
+        # Now that debug_deployment is set by parent, get the real replica count
         self.current_replicas = get_deployment_replicas(
-            self.target_deployment, debug=self.debug_deployment) or 2
-        self.hpa_cooldown_counter = 0
+            self.target_deployment, debug=self.debug_deployment) or 1
         self.previous_replicas = self.current_replicas
-
-        # Request rate tracking (from network RX delta)
-        self.last_network_rx = 0.0
-        self.request_rate_estimate = 0.0
 
         # Override state FIFO with 10 dimensions (or 8 if independent)
         if self.independent_state:
@@ -380,8 +397,10 @@ class BaseJointElasticityEnv(BaseElasticityEnv):
 
         # Normalized replica info
         replica_norm = self.current_replicas / self.max_replicas
-        avg_cpu_replicas = get_deployment_avg_cpu(
-            self.target_deployment, [self.node], debug=self.debug_deployment) / 100.0
+        avg_cpu_replicas_pct = get_deployment_avg_cpu(
+            self.target_deployment, [self.node], debug=self.debug_deployment)
+        self.last_avg_cpu_replicas = avg_cpu_replicas_pct  # Cache for calculate_joint_reward()
+        avg_cpu_replicas = avg_cpu_replicas_pct / 100.0
 
         if self.independent_state:
             state = [n_cpu_limit, n_cpu, available_normed, cpu_percentage / 100, self.priority,
@@ -425,9 +444,9 @@ class BaseJointElasticityEnv(BaseElasticityEnv):
     def calculate_joint_reward(self, rf, hpa_penalty):
         base_reward = self.calculate_agent_reward(rf)
         # Efficiency bonus: reward high per-replica utilization
+        # Reuse avg CPU already fetched in get_current_usage() to avoid duplicate cAdvisor call
         if self.current_replicas > 0:
-            avg_util = get_deployment_avg_cpu(
-                self.target_deployment, [self.node], debug=self.debug_deployment)
+            avg_util = self.last_avg_cpu_replicas
             if self.LOWER_CPU <= avg_util <= self.UPPER_CPU:
                 efficiency_bonus = 0.2
             else:
@@ -478,21 +497,10 @@ class JointDiscreteElasticityEnv(BaseJointElasticityEnv):
         return self.state, reward, done, {}
 
     def _increase_resources(self):
-        updated_cpu_limit = int(
-            max(min(self.ALLOCATED + self.INCREMENT, self.ALLOCATED + self.AVAILABLE), self.MIN_CPU_LIMIT))
-        if updated_cpu_limit != self.ALLOCATED:
-            self.ALLOCATED = updated_cpu_limit
-            patch_pod(self.pod_name, cpu_request=f"{updated_cpu_limit}m", cpu_limit=f"{updated_cpu_limit}m",
-                      container_name=self.container_name, debug=self.debug_deployment)
-            self.cummulative_delta += self.INCREMENT
+        self._apply_delta(self.INCREMENT)
 
     def _decrease_resources(self):
-        updated_cpu_limit = int(max(self.ALLOCATED - self.INCREMENT, self.MIN_CPU_LIMIT))
-        if updated_cpu_limit != self.ALLOCATED:
-            self.ALLOCATED = updated_cpu_limit
-            patch_pod(self.pod_name, cpu_request=f"{updated_cpu_limit}m", cpu_limit=f"{updated_cpu_limit}m",
-                      container_name=self.container_name, debug=self.debug_deployment)
-            self.cummulative_delta += self.INCREMENT
+        self._apply_delta(-self.INCREMENT)
 
 
 class JointContinuousElasticityEnv(BaseJointElasticityEnv):
@@ -506,18 +514,11 @@ class JointContinuousElasticityEnv(BaseJointElasticityEnv):
 
     def step(self, action, rf):
         action = np.clip(action, self.action_space.low, self.action_space.high)
-        vpa_action, hpa_action = action[0], action[1]
+        vpa_action, hpa_action = float(action[0]), float(action[1])
 
-        # VPA: scale CPU
+        # VPA: accumulate scaled delta and patch only when threshold crossed
         scale_action = vpa_action * self.scale_action
-        if scale_action <= max(self.AVAILABLE, 0):
-            new_resource_limit = int(max(self.ALLOCATED + scale_action, self.MIN_CPU_LIMIT))
-            if new_resource_limit != self.ALLOCATED:
-                self.ALLOCATED = new_resource_limit
-                patch_pod(self.pod_name, cpu_request=f"{new_resource_limit}m",
-                          cpu_limit=f"{new_resource_limit}m",
-                          container_name=self.container_name, debug=self.debug_deployment)
-                self.cummulative_delta += abs(scale_action)
+        self._apply_delta(scale_action)
 
         # HPA: discretize continuous action to replica delta
         if abs(hpa_action) > 0.33:

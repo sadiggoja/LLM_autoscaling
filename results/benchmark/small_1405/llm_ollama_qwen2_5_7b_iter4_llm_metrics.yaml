@@ -1,0 +1,25 @@
+mean_decision_latency_ms: !!python/object/apply:numpy._core.multiarray.scalar
+- &id001 !!python/object/apply:numpy.dtype
+  args:
+  - f8
+  - false
+  - true
+  state: !!python/tuple
+  - 3
+  - <
+  - null
+  - null
+  - null
+  - -1
+  - -1
+  - 0
+- !!binary |
+  x3EcNROUmkA=
+p95_decision_latency_ms: !!python/object/apply:numpy._core.multiarray.scalar
+- *id001
+- !!binary |
+  AACA8n7bnkA=
+total_cost_usd: 0.0
+total_decisions: 180
+total_input_tokens: 87386
+total_output_tokens: 1489

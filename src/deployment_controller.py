@@ -25,7 +25,9 @@ def get_deployment_replicas(deployment_name, namespace='default', debug=False):
         deployment = apps_api.read_namespaced_deployment(deployment_name, namespace)
         return deployment.spec.replicas
     except Exception as e:
-        print(f"Error getting replicas for {deployment_name}: {e}")
+        # Silently ignore 404 — cluster may use standalone Pods instead of Deployments
+        if getattr(e, 'status', None) != 404:
+            print(f"Error getting replicas for {deployment_name}: {e}")
         return None
 
 
@@ -43,10 +45,24 @@ def scale_deployment(deployment_name, replicas, namespace='default', debug=False
         print(f"Error scaling {deployment_name}: {e}")
 
 
+def resolve_pod_name(name, namespace='default', debug=False):
+    """If `name` is a Deployment, return the first running pod's name; else return name as-is."""
+    pods = get_deployment_pod_names(name, namespace=namespace, debug=debug)
+    return pods[0] if pods else name
+
+
 def get_deployment_pod_names(deployment_name, namespace='default', debug=False):
-    cfg = load_config()
-    label_selector = cfg['target_app_label']
+    apps_api = _get_apps_api(debug)
     v1 = _get_core_api(debug)
+    try:
+        dep = apps_api.read_namespaced_deployment(deployment_name, namespace)
+        match = dep.spec.selector.match_labels or {}
+        label_selector = ",".join(f"{k}={v}" for k, v in match.items())
+    except Exception as e:
+        if getattr(e, 'status', None) != 404:
+            print(f"Error reading deployment {deployment_name}: {e}")
+        cfg = load_config()
+        label_selector = cfg['target_app_label']
     try:
         pods = v1.list_namespaced_pod(namespace=namespace, label_selector=label_selector)
         return [pod.metadata.name for pod in pods.items if pod.status.phase == "Running"]

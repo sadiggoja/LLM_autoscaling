@@ -26,7 +26,7 @@ def init_nodes(debug=False, custom_label='type=ray'):
                     node_ip = None
                     if pod.status.host_ip:
                         node_ip = pod.status.host_ip
-                    nodes.append(Node(pod.spec.node_name, pod.status.pod_ip, node_ip))
+                    nodes.append(Node(pod.spec.node_name, node_ip, node_ip))
 
     for node in nodes:
         node.update_containers(debug=debug, custom_label=custom_label)
@@ -34,21 +34,42 @@ def init_nodes(debug=False, custom_label='type=ray'):
     return nodes
 
 
-def make_request(url, data):
+_PROBE_LOG_PATH = "results/probe_errors.log"
+_probe_log_fh = None
+
+
+def _probe_log(line):
+    global _probe_log_fh
+    import os
+    if _probe_log_fh is None:
+        os.makedirs(os.path.dirname(_PROBE_LOG_PATH), exist_ok=True)
+        _probe_log_fh = open(_PROBE_LOG_PATH, "a", buffering=1)
+    _probe_log_fh.write(line + "\n")
+
+
+def make_request(url, data, probe=False):
     headers = {'Content-Type': 'application/json'}
     response = None
+    exc = None
     try:
         response = requests.post(url, data=json.dumps(data), headers=headers, timeout=30)
     except Exception as e:
-        pass
+        exc = e
 
-    if response is not None:
-        if response.status_code != 200:
-            # print(f"Error making prediction: {response.text}")
-            return None
-        return response.elapsed.total_seconds()
-    else:
+    if response is None:
+        if probe:
+            from datetime import datetime
+            etype = type(exc).__name__ if exc else "NoResponse"
+            emsg = str(exc)[:160] if exc else ""
+            _probe_log(f"{datetime.now():%H:%M:%S.%f}  url={url}  EXC  {etype}: {emsg}")
         return None
+    if response.status_code != 200:
+        if probe:
+            from datetime import datetime
+            body = (response.text or "")[:160].replace("\n", " ")
+            _probe_log(f"{datetime.now():%H:%M:%S.%f}  url={url}  HTTP_{response.status_code}  body={body!r}")
+        return None
+    return response.elapsed.total_seconds()
 
 
 def increment_last_number(input_string):
@@ -67,6 +88,21 @@ def load_config():
     with open('configs/elasticity_config.yaml', 'r') as f:
         config = yaml.safe_load(f)
     return config
+
+
+def get_deployment_name(agent_id, config=None):
+    """Look up the deployment name for a given 1-based agent_id.
+
+    Reads `service_deployments` from elasticity_config.yaml. Falls back to the
+    legacy `localization-api{id}` naming if the list is unset or too short, so
+    existing single-service setups keep working.
+    """
+    cfg = config if config is not None else load_config()
+    roster = cfg.get('service_deployments') or []
+    if 1 <= agent_id <= len(roster):
+        return roster[agent_id - 1]
+    base = cfg.get('target_deployment', 'localization-api')
+    return f'{base}{agent_id}'
 
 
 def calculate_dynamic_rps(episode, reqs_per_second, min_rps, max_limit_rps=100, scale_factor=0.005,

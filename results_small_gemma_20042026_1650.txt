@@ -1,0 +1,89 @@
+(venv) vboxuser@linuxcloud:~/agent-edgeautoscaling$ python scripts/eval/benchmark_results.py --results_dir results/benchmark/small
+Loaded data for algorithms: ['ddpg', 'k8s_hpa', 'llm_ollama', 'mdqn', 'ppo', 'threshold']
+
+================================================================================
+BENCHMARK RESULTS SUMMARY
+================================================================================
+
+Per-Algorithm Metrics (mean across iterations):
+algorithm                 ddpg  k8s_hpa  llm_ollama     mdqn      ppo  threshold
+metric                                                                          
+mean_cpu_util          23.6792   0.0000      2.2184  42.9157  20.3212    30.2889
+mean_decision_latency   9.1525  75.9157   9413.8562   3.0152   7.2955     0.0205
+mean_reward             0.5394   0.0000     -0.0210   2.1474   0.1765     1.2581
+mean_rt                 0.0472   0.9457      0.8977   1.4336   0.0623     1.0158
+p95_decision_latency   33.0361 161.2524  12489.9932  13.9475  25.9001     0.0214
+p95_rt                  0.1099   2.0000      2.0000   2.0000   0.1151     2.0000
+p99_rt                  0.2275   2.0000     10.4728   2.0000   2.0000     2.0000
+sla_violations          1.1111  49.4444     35.0000  71.6667   3.3333    50.5556
+std_cpu_util           15.3556   0.0000      2.2424  12.8801   9.8684    12.7663
+total_hpa_events        0.0000   0.0000      2.0000   0.0000   0.0000     0.0000
+total_reward           97.0879   0.0000     -3.7853 386.5251  31.7644   226.4523
+total_vpa_deltas      146.0000   0.0000     30.0000  58.0000 138.0000     8.0000
+
+
+Per-Phase Analysis:
+ algorithm  phase  mean_rt  p95_rt  mean_cpu_util  mean_reward  sla_violation_pct
+      ddpg    low   0.0312  0.1085        24.1700       0.5020             0.0000
+      ddpg medium   0.0329  0.0972        21.9399       0.5710             0.0000
+      ddpg   high   0.0775  0.1856        24.9278       0.5451             3.3333
+   k8s_hpa    low   1.0767  2.0000         0.0000       0.0000            56.6667
+   k8s_hpa medium   1.0801  2.0000         0.0000       0.0000            56.6667
+   k8s_hpa   high   0.6804  2.0000         0.0000       0.0000            35.0000
+llm_ollama    low   1.3897  2.0000         0.3213      -0.0236            63.3333
+llm_ollama medium   0.6681  2.0000         2.7322      -0.0145            15.0000
+llm_ollama   high   0.6352  2.0000         3.6017      -0.0250            26.6667
+      mdqn    low   0.3008  2.0000        35.0692       1.3195            15.0000
+      mdqn medium   2.0000  2.0000        46.8390       2.5613           100.0000
+      mdqn   high   2.0000  2.0000        46.8390       2.5613           100.0000
+       ppo    low   0.1048  0.4684        24.6476       0.3537             6.6667
+       ppo medium   0.0225  0.0702        17.3371       0.0521             0.0000
+       ppo   high   0.0597  0.0772        18.9790       0.1236             3.3333
+ threshold    low   0.7291  2.0000        34.7032       1.4916            33.3333
+ threshold medium   1.2197  2.0000        28.0817       1.1413            61.6667
+ threshold   high   1.0985  2.0000        28.0817       1.1413            56.6667
+
+
+Key Metrics Comparison:
+
+  mean_rt:
+    ddpg                : 0.0472 [0.0472, 0.0472]
+    k8s_hpa             : 0.9457 [0.9457, 0.9457]
+    llm_ollama          : 0.8977 [0.8977, 0.8977]
+    mdqn                : 1.4336 [1.4336, 1.4336]
+    ppo                 : 0.0623 [0.0623, 0.0623]
+    threshold           : 1.0158 [1.0158, 1.0158]
+
+  p95_rt:
+    ddpg                : 0.1099 [0.1099, 0.1099]
+    k8s_hpa             : 2.0000 [2.0000, 2.0000]
+    llm_ollama          : 2.0000 [2.0000, 2.0000]
+    mdqn                : 2.0000 [2.0000, 2.0000]
+    ppo                 : 0.1151 [0.1151, 0.1151]
+    threshold           : 2.0000 [2.0000, 2.0000]
+
+  sla_violations:
+    ddpg                : 1.1111 [1.1111, 1.1111]
+    k8s_hpa             : 49.4444 [49.4444, 49.4444]
+    llm_ollama          : 35.0000 [35.0000, 35.0000]
+    mdqn                : 71.6667 [71.6667, 71.6667]
+    ppo                 : 3.3333 [3.3333, 3.3333]
+    threshold           : 50.5556 [50.5556, 50.5556]
+
+  mean_cpu_util:
+    ddpg                : 23.6792 [23.6792, 23.6792]
+    k8s_hpa             : 0.0000 [0.0000, 0.0000]
+    llm_ollama          : 2.2184 [2.2184, 2.2184]
+    mdqn                : 42.9157 [42.9157, 42.9157]
+    ppo                 : 20.3212 [20.3212, 20.3212]
+    threshold           : 30.2889 [30.2889, 30.2889]
+
+  mean_decision_latency:
+    ddpg                : 9.1525 [9.1525, 9.1525]
+    k8s_hpa             : 75.9157 [75.9157, 75.9157]
+    llm_ollama          : 9413.8562 [9413.8562, 9413.8562]
+    mdqn                : 3.0152 [3.0152, 3.0152]
+    ppo                 : 7.2955 [7.2955, 7.2955]
+    threshold           : 0.0205 [0.0205, 0.0205]
+
+Results saved to results/benchmark/small/

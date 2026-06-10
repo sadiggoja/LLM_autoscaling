@@ -2,23 +2,50 @@
 
 # Algorithms to benchmark
 algorithms:
-  - name: "joint_ppo"
-    type: "rl"
-    model_path: "trained/ppo/1000ep_rf_2_20rps10kepochs5alpha10epupdate50scale_a_1000resources"
-  - name: "joint_ddpg"
-    type: "rl"
-    model_path: "trained/ddpg/1000ep_2rf_20rps5.0alpha_50scale1000resources"
-  - name: "joint_dqn"
-    type: "rl"
-    model_path: "trained/dqn/mdqn1000ep1000m25inc2_rf_20rps5.0alpha1000res"
-  - name: "llm_claude"
+  # - name: "ppo"
+  #   type: "rl"
+  #   model_path: "trained/ppo/1000ep_rf_2_20rps10kepochs5alpha10epupdate50scale_a_1000resources"
+  # - name: "ddpg"
+  #   type: "rl"
+  #   model_path: "trained/ddpg/1000ep_2rf_20rps5.0alpha_50scale1000resources"
+  # - name: "mdqn"
+  #   type: "rl"
+  #   model_path: "trained/dqn/mdqn1000ep1000m25inc2_rf_20rps5.0alpha1000res"
+  # LLM entry with a list of models: the runner expands this into one
+  # benchmark run per model, each saved under its own algorithm name
+  # (e.g. llm_ollama_qwen2_5_7b, llm_ollama_gemma2_9b, ...).
+  # For a single model, use `model: "<name>"` instead of the `models:` list.
+  # Provider must be one of: "ollama", "anthropic". Connection details
+  # (base_url, max_tokens) come from configs/llm_config.yaml.
+  #
+  # action_mode (optional): "vpa" | "hpa" | "both"
+  #   vpa  — CPU only (scale_cpu / no_action). Output name gets a "_vpa" tag.
+  #   hpa  — replicas only (scale_replicas / no_action). Tag: "_hpa".
+  #   both — full action space (default). No tag added.
+  # When omitted, the default from configs/llm_config.yaml is used.
+  - name: "llm"
     type: "llm"
-  - name: "llm_llama"
-    type: "llm"
-  - name: "threshold"
-    type: "heuristic"
-  - name: "k8s_hpa"
-    type: "heuristic"
+    provider: "ollama"
+    action_mode: "vpa"
+    models:
+      # - "qwen2.5:7b"
+      # - "mistral:latest"
+      # - "llama3:8b"
+      - "qwen2.5:0.5b"
+  # - name: "threshold"
+  #   type: "heuristic"
+  # - name: "k8s_hpa"
+  #   type: "heuristic"
+  #   apply_yaml: "configs/localization/hpa/config.yaml"
+  # k8s_vpa: in-place VPA heuristic (RL-comparable). Uses the VPA recommender
+  # rule but actuates in-place via the env, so it needs NO real VPA operator.
+  # - name: "k8s_vpa"
+  #   type: "heuristic"
+  # k8s_vpa_real: passive baseline driven by the real (restart-based) VPA
+  # operator. Uncomment (and install VPA) to measure true VPA with evictions.
+  # - name: "k8s_vpa_real"
+  #   type: "heuristic"
+  #   apply_yaml: "configs/localization/vpa/config.yaml"
 
 # General settings
 iterations: 3
@@ -37,18 +64,12 @@ load_patterns:
   - name: "high"
     rps: 50
     duration_steps: 60
-  - name: "spike"
-    rps: 80
-    duration_steps: 30
-  - name: "cooldown"
-    rps: 10
-    duration_steps: 30
 
 # Scalability scenarios
 scenarios:
   small:
-    service_count: 3
-    total_resources: 1000
+    service_count: 2
+    total_resources: 2000
   medium:
     service_count: 10
     total_resources: 3000

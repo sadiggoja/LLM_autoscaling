@@ -1,3 +1,4 @@
+import time
 from datetime import datetime
 
 import requests
@@ -31,11 +32,37 @@ class Node:
         Retrieves the resource usage metrics for a specific container.
     """
 
+    # Class-level circuit breaker state keyed by ca_ip so all Node instances
+    # pointing at the same physical host share failure tracking.
+    _circuit: dict = {}  # ca_ip -> {'available': bool, 'fails': int, 'last_fail': float}
+    _sessions: dict = {}  # ca_ip -> requests.Session for keep-alive
+
+    _CADVISOR_MAX_FAILS = 10
+    _CADVISOR_RETRY_INTERVAL = 30.0
+    _CADVISOR_INNER_RETRIES = 2
+    _CADVISOR_INNER_BACKOFF = 0.5
+    _CADVISOR_TIMEOUT = (10, 10)  # (connect, read) seconds — caps worst-case stall
+
     def __init__(self, name, ca_ip, ip):
         self.name = name
         self.ip = ip
         self.ca_ip = ca_ip
         self.containers = dict()
+        self._subcontainers_cache = None
+        self._subcontainers_cache_time = 0.0
+        self._cache_ttl = 0.9  # just under housekeeping_interval=1s
+        self._last_known_stats = None  # fallback when cAdvisor is temporarily unreachable
+        self._last_known_stats_per_container = {}  # fallback when stats history is too short
+        self._throughput_cache = None
+        self._throughput_cache_time = 0.0
+        self._last_known_throughput = None
+        if ca_ip not in Node._circuit:
+            Node._circuit[ca_ip] = {'available': True, 'fails': 0, 'last_fail': 0.0}
+        if ca_ip not in Node._sessions:
+            session = requests.Session()
+            adapter = requests.adapters.HTTPAdapter(pool_connections=4, pool_maxsize=8)
+            session.mount('http://', adapter)
+            Node._sessions[ca_ip] = session
 
     def __str__(self):
         return f"Node(name={self.name}, ip={self.ip}, ca_ip={self.ca_ip}, containers={self.containers})"
@@ -65,38 +92,97 @@ class Node:
     def get_containers(self):
         return self.containers
 
-    def get_container_usage(self, container_id):
-        containers_stats_url = f"http://{self.ca_ip}:8080/api/v1.3/subcontainers/kubepods/"
+    def _cadvisor_get(self, url):
+        session = Node._sessions[self.ca_ip]
+        last_exc = None
+        for attempt in range(Node._CADVISOR_INNER_RETRIES):
+            try:
+                return session.get(url, timeout=Node._CADVISOR_TIMEOUT)
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                last_exc = e
+                if attempt < Node._CADVISOR_INNER_RETRIES - 1:
+                    time.sleep(Node._CADVISOR_INNER_BACKOFF * (attempt + 1))
+        raise last_exc
 
-        response = requests.get(containers_stats_url)
+    def _fetch_subcontainers(self):
+        now = time.time()
+        if self._subcontainers_cache is not None and (now - self._subcontainers_cache_time) < self._cache_ttl:
+            return self._subcontainers_cache
+
+        cb = Node._circuit[self.ca_ip]
+
+        # If circuit is open, skip the network call entirely
+        if not cb['available']:
+            if (now - cb['last_fail']) < Node._CADVISOR_RETRY_INTERVAL:
+                return self._last_known_stats
+            # Retry window elapsed — half-open: try once more
+            cb['available'] = True
+            cb['fails'] = 0
+
+        containers_stats_url = f"http://{self.ca_ip}:8080/api/v1.3/subcontainers/kubepods/"
+        try:
+            response = self._cadvisor_get(containers_stats_url)
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            cb['fails'] += 1
+            if cb['fails'] >= Node._CADVISOR_MAX_FAILS:
+                print(f"cAdvisor at {self.ca_ip} unreachable after {cb['fails']} attempts — "
+                      f"suspending retries for {int(Node._CADVISOR_RETRY_INTERVAL)}s")
+                cb['available'] = False
+                cb['last_fail'] = now
+            else:
+                print(f"cAdvisor timeout/connection error: {e}")
+            return self._last_known_stats
+
         if response.status_code == 200:
-            containers_stats = response.json()
+            cb['fails'] = 0
+            cb['available'] = True
+            self._subcontainers_cache = response.json()
+            self._subcontainers_cache_time = now
+            self._last_known_stats = self._subcontainers_cache
+            return self._subcontainers_cache
+
+        return None
+
+    def get_container_usage(self, container_id):
+        containers_stats = self._fetch_subcontainers()
+        if containers_stats is not None:
             container = next((c for c in containers_stats if container_id in c["name"]), None)
             if container:
-                # tweak the comparable metrics to -3 for more accurate metric
-                current_cpu_usage_nanoseconds = container["stats"][-1]["cpu"]["usage"]["total"]
-                previous_cpu_usage_nanoseconds = container["stats"][-2]["cpu"]["usage"]["total"]
+                stats = container.get("stats") or []
+                if len(stats) < 2:
+                    last = self._last_known_stats_per_container.get(container_id)
+                    if last is not None:
+                        return last
+                    cpu_limit_mc = container["spec"]["cpu"]["quota"] / 100
+                    memory_limit_bytes = container["spec"]["memory"]["limit"]
+                    return (cpu_limit_mc, 0, 0), (memory_limit_bytes / (1024 * 1024), 0, 0), (0, 0), False
 
-                current_timestamp_str = container["stats"][-1]["timestamp"].split('.')[0] + 'Z'
-                previous_timestamp_str = container["stats"][-2]["timestamp"].split('.')[0] + 'Z'
+                current_cpu_usage_nanoseconds = stats[-1]["cpu"]["usage"]["total"]
+                previous_cpu_usage_nanoseconds = stats[-2]["cpu"]["usage"]["total"]
+
+                current_timestamp_str = stats[-1]["timestamp"].split('.')[0] + 'Z'
+                previous_timestamp_str = stats[-2]["timestamp"].split('.')[0] + 'Z'
 
                 current_timestamp = datetime.strptime(current_timestamp_str, "%Y-%m-%dT%H:%M:%SZ")
                 previous_timestamp = datetime.strptime(previous_timestamp_str, "%Y-%m-%dT%H:%M:%SZ")
 
-                time_interval = current_timestamp - previous_timestamp
-                time_interval_seconds = time_interval.total_seconds()
-
-                # print(f"curr: {current_timestamp}, prev: {previous_timestamp}, difference: {time_interval_seconds}")
+                time_interval_seconds = (current_timestamp - previous_timestamp).total_seconds()
+                if time_interval_seconds <= 0:
+                    last = self._last_known_stats_per_container.get(container_id)
+                    if last is not None:
+                        return last
+                    cpu_limit_mc = container["spec"]["cpu"]["quota"] / 100
+                    memory_limit_bytes = container["spec"]["memory"]["limit"]
+                    return (cpu_limit_mc, 0, 0), (memory_limit_bytes / (1024 * 1024), 0, 0), (0, 0), False
 
                 cpu_usage_delta_nanoseconds = current_cpu_usage_nanoseconds - previous_cpu_usage_nanoseconds
                 cpu_usage_per_second = cpu_usage_delta_nanoseconds / time_interval_seconds
 
                 cpu_usage_millicores = cpu_usage_per_second / 1000000
-                # cpu_limit_mc = container["spec"]["cpu"]["limit"]
                 cpu_limit_mc = container["spec"]["cpu"]["quota"] / 100
                 cpu_usage_percentage = (cpu_usage_per_second / (cpu_limit_mc * 1_000_000)) * 100
 
-                current_memory_usage_bytes = container["stats"][-1]["memory"]["usage"]
+                current_memory_usage_bytes = stats[-1]["memory"]["usage"]
 
                 memory_usage_megabytes = current_memory_usage_bytes / (1024 * 1024)
                 memory_limit_bytes = container["spec"]["memory"]["limit"]
@@ -104,27 +190,26 @@ class Node:
 
                 network_rx_per_second_mb, network_tx_per_second_mb = self.get_throughput(time_interval_seconds)
 
-                throttled = container['stats'][-1]['cpu']['cfs']['throttled_time'] > \
-                            container['stats'][-2]['cpu']['cfs']['throttled_time']
+                throttled = stats[-1]['cpu']['cfs']['throttled_time'] > stats[-2]['cpu']['cfs']['throttled_time']
 
-                return (cpu_limit_mc, cpu_usage_millicores, cpu_usage_percentage), (
-                    memory_limit_bytes / (1024 * 1024), memory_usage_megabytes, memory_usage_percentage), (
-                    network_rx_per_second_mb, network_tx_per_second_mb), throttled
+                result = ((cpu_limit_mc, cpu_usage_millicores, cpu_usage_percentage),
+                          (memory_limit_bytes / (1024 * 1024), memory_usage_megabytes, memory_usage_percentage),
+                          (network_rx_per_second_mb, network_tx_per_second_mb), throttled)
+                self._last_known_stats_per_container[container_id] = result
+                return result
             else:
                 print(f"Container {container_id} not found")
-                return (0, 0, 0), (0, 0, 0), (0, 0), (0, 0)
+                return (0, 0, 0), (0, 0, 0), (0, 0), False
         else:
-            print("Failed to fetch containers stats")
+            if Node._circuit[self.ca_ip]['available']:
+                print("Failed to fetch containers stats")
+            return (0, 0, 0), (0, 0, 0), (0, 0), False
 
     def get_container_limits(self, container_id):
-        containers_stats_url = f"http://{self.ca_ip}:8080/api/v1.3/subcontainers/kubepods/"
-
-        response = requests.get(containers_stats_url)
-        if response.status_code == 200:
-            containers_stats = response.json()
+        containers_stats = self._fetch_subcontainers()
+        if containers_stats is not None:
             container = next((c for c in containers_stats if container_id in c["name"]), None)
             if container:
-                # cpu_limit_mc = container["spec"]["cpu"]["limit"]
                 cpu_limit_mc = container["spec"]["cpu"]["quota"] / 100
                 memory_limit_bytes = container["spec"]["memory"]["limit"]
                 return cpu_limit_mc, memory_limit_bytes
@@ -132,18 +217,20 @@ class Node:
                 print(f"Container {container_id} not found")
                 return 0, 0
         else:
-            print("Failed to fetch containers stats")
+            if Node._circuit[self.ca_ip]['available']:
+                print("Failed to fetch containers stats")
 
     def get_container_usage_saving_data(self, container_id):
-        containers_stats_url = f"http://{self.ca_ip}:8080/api/v1.3/subcontainers/kubepods/"
-
-        response = requests.get(containers_stats_url)
-        if response.status_code == 200:
-            containers_stats = response.json()
+        containers_stats = self._fetch_subcontainers()
+        if containers_stats is not None:
             container = next((c for c in containers_stats if container_id in c["name"]), None)
             if container:
-                current_cpu_usage_nanoseconds = container["stats"][-1]["cpu"]["usage"]["total"]
-                previous_cpu_usage_nanoseconds = container["stats"][-2]["cpu"]["usage"]["total"]
+                stats = container.get("stats") or []
+                if len(stats) < 2:
+                    print(f"Container {container_id}: cAdvisor returned <2 stat samples, skipping")
+                    return None
+                current_cpu_usage_nanoseconds = stats[-1]["cpu"]["usage"]["total"]
+                previous_cpu_usage_nanoseconds = stats[-2]["cpu"]["usage"]["total"]
 
                 current_timestamp_str = container["stats"][-1]["timestamp"].split('.')[0] + 'Z'
                 previous_timestamp_str = container["stats"][-2]["timestamp"].split('.')[0] + 'Z'
@@ -209,33 +296,48 @@ class Node:
                 print(f"Container {container_id} not found")
                 return (0, 0, 0), (0, 0, 0), (0, 0), (0, 0)
         else:
-            print("Failed to fetch containers stats")
+            if Node._circuit[self.ca_ip]['available']:
+                print("Failed to fetch containers stats")
 
     def get_throughput(self, time_interval):
+        now = time.time()
+        if self._throughput_cache is not None and (now - self._throughput_cache_time) < self._cache_ttl:
+            return self._throughput_cache
+
+        cb = Node._circuit[self.ca_ip]
+        if not cb['available']:
+            return self._last_known_throughput if self._last_known_throughput is not None else (0, 0)
+
         containers_url = f"http://{self.ca_ip}:8080/api/v1.3/containers"
-        response = requests.get(containers_url)
+        try:
+            response = self._cadvisor_get(containers_url)
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            if cb['available']:
+                print(f"cAdvisor throughput timeout: {e}")
+            return self._last_known_throughput if self._last_known_throughput is not None else (0, 0)
         if response.status_code == 200:
             containers_stats = response.json()
-            # todo: fixme
-            current_network_rx_bytes = containers_stats["stats"][-1]["network"]["interfaces"][-1]["rx_bytes"]
-            previous_network_rx_bytes = containers_stats["stats"][-2]["network"]["interfaces"][-1]["rx_bytes"]
+            stats = containers_stats.get("stats") or []
+            if len(stats) < 2:
+                return self._last_known_throughput if self._last_known_throughput is not None else (0, 0)
+            current_network_rx_bytes = stats[-1]["network"]["interfaces"][-1]["rx_bytes"]
+            previous_network_rx_bytes = stats[-2]["network"]["interfaces"][-1]["rx_bytes"]
             network_rx_delta = current_network_rx_bytes - previous_network_rx_bytes
             network_rx_per_second = network_rx_delta / time_interval
 
-            current_network_tx_bytes = containers_stats["stats"][-1]["network"]["interfaces"][-1]["tx_bytes"]
-            previous_network_tx_bytes = containers_stats["stats"][-2]["network"]["interfaces"][-1]["tx_bytes"]
+            current_network_tx_bytes = stats[-1]["network"]["interfaces"][-1]["tx_bytes"]
+            previous_network_tx_bytes = stats[-2]["network"]["interfaces"][-1]["tx_bytes"]
             network_tx_delta = current_network_tx_bytes - previous_network_tx_bytes
             network_tx_per_second = network_tx_delta / time_interval
 
-            # current_network_rx_packets = containers_stats["stats"][-1]["network"]["interfaces"][-1]["rx_packets"]
-            # previous_network_rx_packets = containers_stats["stats"][-2]["network"]["interfaces"][-1]["rx_packets"]
-            # network_rx_packets_delta = current_network_rx_packets - previous_network_rx_packets
-            # packets_per_second = network_rx_packets_delta / time_interval
-            # print(f"Packets per second: {packets_per_second}")
-
-            return (network_rx_per_second / (1024 * 1024)), (network_tx_per_second / (1024 * 1024))
+            result = (network_rx_per_second / (1024 * 1024)), (network_tx_per_second / (1024 * 1024))
+            self._throughput_cache = result
+            self._throughput_cache_time = now
+            self._last_known_throughput = result
+            return result
         else:
-            print("Failed to fetch containers stats")
+            if Node._circuit[self.ca_ip]['available']:
+                print("Failed to fetch containers stats")
             return 0, 0
 
     def get_usage(self):
@@ -295,15 +397,14 @@ class Node:
     def get_allocated_resources(self):
         allocated_cpu = 0
         allocated_memory = 0
+        containers_stats = self._fetch_subcontainers()
+        if containers_stats is None:
+            return allocated_cpu, allocated_memory
         for container_id, _ in list(self.get_containers().items()):
-            containers_url = f"http://{self.ca_ip}:8080/api/v1.3/subcontainers/kubepods/"
-            response = requests.get(containers_url)
-            if response.status_code == 200:
-                containers_stats = response.json()
-                container = next((c for c in containers_stats if container_id in c["name"]), None)
-                if container:
-                    allocated_cpu += container['spec']['cpu']['limit']
-                    allocated_memory += container['spec']['memory']['limit']
+            container = next((c for c in containers_stats if container_id in c["name"]), None)
+            if container:
+                allocated_cpu += container['spec']['cpu']['limit']
+                allocated_memory += container['spec']['memory']['limit']
         return allocated_cpu, allocated_memory
 
     # wip: calculates how much the pods from the application have allocated

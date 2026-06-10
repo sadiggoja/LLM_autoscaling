@@ -14,8 +14,8 @@ from utils import make_request
 # These 2 functions are not part of the loading process
 def process_single_request(url, data):
     try:
-        data["feature"] = random.randint(0, 130)
-        rt = make_request(url, data)
+        data["feature"] = random.randint(0, 129)
+        rt = make_request(url, data, probe=True)
         if rt is not None:
             return rt
     except Exception as e:
@@ -37,7 +37,7 @@ def make_request_thread(url, data, interval, variable=False):
     while True:
         try:
             local_data = data.copy()
-            local_data["feature"] = random.randint(0, 130)
+            local_data["feature"] = random.randint(0, 129)
             make_request(url, local_data)
         except Exception as e:
             pass
@@ -105,6 +105,12 @@ if __name__ == "__main__":
         help="Variable number of users every interval",
     )
     parser.add_argument(
+        "--n_services",
+        type=int,
+        default=3,
+        help="Number of services to load (used with --all)",
+    )
+    parser.add_argument(
         "--all",
         action="store_true",
         default=False,
@@ -125,20 +131,13 @@ if __name__ == "__main__":
     )
 
     if not all_services:
-        # url = f"http://localhost:{get_loadbalancer_external_port(service_name='ingress-nginx-controller')}/api{service}/predict"
-        # url = f"http://localhost:{ingress_port}/api{service}/predict"  # Out ingress port of the service
-        url = f"http://localhost:{ingress_port}/predict"  # Ingress port of the service
-
-        # url = f"http://localhost:{ingress_port}/predict" # API for HPA scaling,
-        # 1 igress linked to services to many pods (Round Robin load balancing)
+        url = f"http://localhost:{ingress_port}/api{service}/predict"
         spam_requests(url, num_users, interval, variable=variable)
         print(f"Loaded the cluster with {num_users} users on {url}")
     else:
         urls = [
-            f"http://localhost:{ingress_port}/api1/predict",
-            f"http://localhost:{ingress_port}/api2/predict",
-            f"http://localhost:{ingress_port}/api3/predict",
-            # f"http://localhost:{ingress_port}/api4/predict",
+            f"http://localhost:{ingress_port}/api{i}/predict"
+            for i in range(1, args.n_services + 1)
         ]
         with ThreadPoolExecutor() as executor:
             futures = []

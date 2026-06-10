@@ -1,0 +1,63 @@
+# Vertical Pod Autoscaler baseline for the localization-api deployments.
+#
+# Requires the VPA operator (vpa-recommender, vpa-updater, vpa-admission-controller)
+# to be installed in the cluster — see scripts/microk8s/install_vpa.sh.
+#
+# updateMode notes:
+#   Auto              — evicts and recreates pods to apply new requests/limits.
+#                       Works on any VPA version; causes brief 503s during resize.
+#   Recreate          — same as Auto.
+#   Initial           — only sets resources at pod creation. Not adaptive.
+#   Off               — emits recommendations only; never resizes pods.
+#   InPlaceOrRecreate — requires VPA >= 1.4 started with `--feature-gates=InPlaceOrRecreate=true`
+#                       AND Kubernetes >= 1.27 with `InPlacePodVerticalScaling=true`
+#                       (already enabled by scripts/microk8s/setup.sh).
+#                       Resizes pods in place when possible; falls back to evict.
+#
+# We default to "Auto" because it works on every VPA release; flip to
+# "InPlaceOrRecreate" once you've verified your VPA install supports it.
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: localization-api1-vpa
+  namespace: default
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: localization-api1
+  updatePolicy:
+    updateMode: "Auto"
+  resourcePolicy:
+    containerPolicies:
+      - containerName: '*'
+        minAllowed:
+          cpu: "100m"
+        maxAllowed:
+          cpu: "1000m"
+        controlledResources: ["cpu"]
+        controlledValues: RequestsAndLimits
+
+---
+
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: localization-api2-vpa
+  namespace: default
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: localization-api2
+  updatePolicy:
+    updateMode: "Auto"
+  resourcePolicy:
+    containerPolicies:
+      - containerName: '*'
+        minAllowed:
+          cpu: "100m"
+        maxAllowed:
+          cpu: "1000m"
+        controlledResources: ["cpu"]
+        controlledValues: RequestsAndLimits

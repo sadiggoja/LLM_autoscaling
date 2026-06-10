@@ -198,9 +198,14 @@ def patch_pod(pod_name, cpu_request="1", cpu_limit="1", memory_request=None, mem
 
 
 def set_container_cpu_values(cpus=50, container='localization-api', n=3, print_output=False):
+    from deployment_controller import get_deployment_pod_names
+    from utils import get_deployment_name
     for i in range(1, n + 1):
-        patch_pod(f'localization-api{i}', cpu_request=f"{cpus}m", cpu_limit=f"{cpus}m",
-                  container_name='localization-api', debug=True, print_output=print_output)
+        deployment = get_deployment_name(i)
+        pod_names = get_deployment_pod_names(deployment, debug=True) or [deployment]
+        for pod_name in pod_names:
+            patch_pod(pod_name, cpu_request=f"{cpus}m", cpu_limit=f"{cpus}m",
+                      container_name=container, debug=True, print_output=print_output)
 
 
 if __name__ == '__main__':

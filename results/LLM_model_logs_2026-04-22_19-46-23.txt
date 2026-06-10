@@ -1,0 +1,10 @@
+LLM Benchmark Log — 2026-04-22T19:46:23.695333
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+  Phase: low  10 RPS  30 steps
+────────────────────────────────────────────────────────────────────────────────
+  step=  1  pod=localization-api1  5004ms  [parser]  raw_text='scale_cpu(100)'  → action=[1. 0.]
+  step=  1  pod=localization-api2  976ms  [parser]  raw_text='no_action()'  → action=[0. 0.]
+  step=  2  pod=localization-api1  1092ms  [parser]  raw_text='no_action()'  → action=[0. 0.]
+  step=  2  pod=localization-api2  1148ms  [parser]  raw_text='scale_cpu(100)'  → action=[1. 0.]

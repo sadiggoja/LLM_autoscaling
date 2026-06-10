@@ -1,0 +1,31 @@
+LLM Benchmark Log — 2026-04-22T19:45:07.160769
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+  Phase: low  10 RPS  30 steps
+────────────────────────────────────────────────────────────────────────────────
+  step=  1  pod=localization-api1  5ms  [parser]  raw_text='(empty)'  → action=[0. 0.]
+  step=  1  pod=localization-api2  5ms  [parser]  raw_text='(empty)'  → action=[0. 0.]
+  step=  2  pod=localization-api1  5ms  [parser]  raw_text='(empty)'  → action=[0. 0.]
+  step=  2  pod=localization-api2  16ms  [parser]  raw_text='(empty)'  → action=[0. 0.]
+  step=  3  pod=localization-api1  5ms  [parser]  raw_text='(empty)'  → action=[0. 0.]
+  step=  3  pod=localization-api2  5ms  [parser]  raw_text='(empty)'  → action=[0. 0.]
+  step=  4  pod=localization-api1  25ms  [parser]  raw_text='(empty)'  → action=[0. 0.]
+  step=  4  pod=localization-api2  7ms  [parser]  raw_text='(empty)'  → action=[0. 0.]
+  step=  5  pod=localization-api1  6ms  [parser]  raw_text='(empty)'  → action=[0. 0.]
+  step=  5  pod=localization-api2  6ms  [parser]  raw_text='(empty)'  → action=[0. 0.]
+  step=  6  pod=localization-api1  7ms  [parser]  raw_text='(empty)'  → action=[0. 0.]
+  step=  6  pod=localization-api2  6ms  [parser]  raw_text='(empty)'  → action=[0. 0.]
+  step=  7  pod=localization-api1  6ms  [parser]  raw_text='(empty)'  → action=[0. 0.]
+  step=  7  pod=localization-api2  5ms  [parser]  raw_text='(empty)'  → action=[0. 0.]
+  step=  8  pod=localization-api1  4ms  [parser]  raw_text='(empty)'  → action=[0. 0.]
+  step=  8  pod=localization-api2  6ms  [parser]  raw_text='(empty)'  → action=[0. 0.]
+  step=  9  pod=localization-api1  8ms  [parser]  raw_text='(empty)'  → action=[0. 0.]
+  step=  9  pod=localization-api2  6ms  [parser]  raw_text='(empty)'  → action=[0. 0.]
+  step= 10  pod=localization-api1  10ms  [parser]  raw_text='(empty)'  → action=[0. 0.]
+  step= 10  pod=localization-api2  7ms  [parser]  raw_text='(empty)'  → action=[0. 0.]
+  step= 11  pod=localization-api1  6ms  [parser]  raw_text='(empty)'  → action=[0. 0.]
+  step= 11  pod=localization-api2  6ms  [parser]  raw_text='(empty)'  → action=[0. 0.]
+  step= 12  pod=localization-api1  7ms  [parser]  raw_text='(empty)'  → action=[0. 0.]
+  step= 12  pod=localization-api2  6ms  [parser]  raw_text='(empty)'  → action=[0. 0.]
+  step= 13  pod=localization-api1  7ms  [parser]  raw_text='(empty)'  → action=[0. 0.]

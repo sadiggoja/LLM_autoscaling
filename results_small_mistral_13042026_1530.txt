@@ -1,0 +1,101 @@
+(venv) vboxuser@linuxcloud:~/agent-edgeautoscaling$ python scripts/eval/benchmark_results.py --results_dir results/benchmark/small
+Loaded data for algorithms: ['ddpg', 'k8s_hpa', 'llm_ollama', 'mdqn', 'ppo', 'threshold']
+
+================================================================================
+BENCHMARK RESULTS SUMMARY
+================================================================================
+
+Per-Algorithm Metrics (mean across iterations):
+algorithm                ddpg  k8s_hpa  llm_ollama    mdqn      ppo  threshold
+metric                                                                        
+mean_cpu_util          0.0000   0.0000      0.8144  0.0000  23.0237     0.0000
+mean_decision_latency  3.3610  72.4257  11903.0833  2.5638   3.7088     0.0458
+mean_reward            0.0000   0.0000      0.0011  0.0000   0.0813    -0.0020
+mean_rt                0.2381   0.2076      1.1029  0.2513   1.3227     0.0893
+p95_decision_latency  12.6753 158.4828  19767.0346  7.2195  12.5893     0.0385
+p95_rt                 2.0000   1.1565      2.0000  2.0000   2.0000     0.2277
+p99_rt                 2.0000   2.0000     11.0641  2.0000   2.0000     0.9149
+sla_violations         9.6667   7.3333     44.6667 10.3333  65.6667     4.6667
+std_cpu_util           0.0000   0.0000      1.3871  0.0000   6.2436     0.0000
+total_hpa_events       0.0000   0.0000      1.0000  0.0000   0.0000     1.0000
+total_reward           0.0000   0.0000      0.3264  0.0000  24.3854    -0.6000
+total_vpa_deltas       8.0000   0.0000     51.0000  0.0000 211.0000     0.0000
+
+
+Per-Phase Analysis:
+ algorithm    phase  mean_rt  p95_rt  mean_cpu_util  mean_reward  sla_violation_pct
+      ddpg      low   0.6465  2.0000         0.0000       0.0000            28.3333
+      ddpg   medium   0.3233  2.0000         0.0000       0.0000            15.0000
+      ddpg     high   0.0436  0.1144         0.0000       0.0000             0.0000
+      ddpg    spike   0.0913  0.1665         0.0000       0.0000             3.3333
+      ddpg cooldown   0.0856  0.1220         0.0000       0.0000             1.6667
+   k8s_hpa      low   0.0837  0.1466         0.0000       0.0000             3.3333
+   k8s_hpa   medium   0.3606  2.0000         0.0000       0.0000            10.0000
+   k8s_hpa     high   0.0748  0.1788         0.0000       0.0000             1.6667
+   k8s_hpa    spike   0.3086  2.0000         0.0000       0.0000            10.0000
+   k8s_hpa cooldown   0.2101  2.0000         0.0000       0.0000            11.6667
+llm_ollama      low   1.3305  2.0000         0.0000       0.0000            66.6667
+llm_ollama   medium   1.2867  2.0000         0.0000       0.0000            55.0000
+llm_ollama     high   0.9132  2.0000         0.0000       0.0000            31.6667
+llm_ollama    spike   0.7973  2.2046         0.9397       0.0054            20.0000
+llm_ollama cooldown   1.1868  2.0000         3.1322       0.0000            50.0000
+      mdqn      low   0.0973  0.1279         0.0000       0.0000             1.6667
+      mdqn   medium   0.0475  0.1151         0.0000       0.0000             0.0000
+      mdqn     high   0.0583  0.1511         0.0000       0.0000             1.6667
+      mdqn    spike   0.6684  2.0000         0.0000       0.0000            31.6667
+      mdqn cooldown   0.3851  2.0000         0.0000       0.0000            16.6667
+       ppo      low   0.0601  0.0896        22.6868       0.3053             1.6667
+       ppo   medium   0.8177  2.0000        20.9012       0.1011            40.0000
+       ppo     high   1.7357  2.0000        23.8435       0.0000            86.6667
+       ppo    spike   2.0000  2.0000        23.8435       0.0000           100.0000
+       ppo cooldown   2.0000  2.0000        23.8435       0.0000           100.0000
+ threshold      low   0.0703  0.1886         0.0000      -0.0100             1.6667
+ threshold   medium   0.0759  0.2119         0.0000       0.0000             3.3333
+ threshold     high   0.0625  0.1225         0.0000       0.0000             1.6667
+ threshold    spike   0.1616  0.7880         0.0000       0.0000            15.0000
+ threshold cooldown   0.0761  0.1340         0.0000       0.0000             1.6667
+
+
+Key Metrics Comparison:
+
+  mean_rt:
+    ddpg                : 0.2381 [0.2381, 0.2381]
+    k8s_hpa             : 0.2076 [0.2076, 0.2076]
+    llm_ollama          : 1.1029 [1.1029, 1.1029]
+    mdqn                : 0.2513 [0.2513, 0.2513]
+    ppo                 : 1.3227 [1.3227, 1.3227]
+    threshold           : 0.0893 [0.0893, 0.0893]
+
+  p95_rt:
+    ddpg                : 2.0000 [2.0000, 2.0000]
+    k8s_hpa             : 1.1565 [1.1565, 1.1565]
+    llm_ollama          : 2.0000 [2.0000, 2.0000]
+    mdqn                : 2.0000 [2.0000, 2.0000]
+    ppo                 : 2.0000 [2.0000, 2.0000]
+    threshold           : 0.2277 [0.2277, 0.2277]
+
+  sla_violations:
+    ddpg                : 9.6667 [9.6667, 9.6667]
+    k8s_hpa             : 7.3333 [7.3333, 7.3333]
+    llm_ollama          : 44.6667 [44.6667, 44.6667]
+    mdqn                : 10.3333 [10.3333, 10.3333]
+    ppo                 : 65.6667 [65.6667, 65.6667]
+    threshold           : 4.6667 [4.6667, 4.6667]
+
+  mean_cpu_util:
+    ddpg                : 0.0000 [0.0000, 0.0000]
+    k8s_hpa             : 0.0000 [0.0000, 0.0000]
+    llm_ollama          : 0.8144 [0.8144, 0.8144]
+    mdqn                : 0.0000 [0.0000, 0.0000]
+    ppo                 : 23.0237 [23.0237, 23.0237]
+    threshold           : 0.0000 [0.0000, 0.0000]
+
+  mean_decision_latency:
+    ddpg                : 3.3610 [3.3610, 3.3610]
+    k8s_hpa             : 72.4257 [72.4257, 72.4257]
+    llm_ollama          : 11903.0833 [11903.0833, 11903.0833]
+    mdqn                : 2.5638 [2.5638, 2.5638]
+    ppo                 : 3.7088 [3.7088, 3.7088]
+    threshold           : 0.0458 [0.0458, 0.0458]
+
+Results saved to results/benchmark/small/

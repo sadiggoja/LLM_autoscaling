@@ -1,84 +1,104 @@
-apiVersion: v1
-kind: Pod
+apiVersion: apps/v1
+kind: Deployment
 metadata:
   name: localization-api1
   labels:
     app: localization-api
     version: v1
+    workload: knn
 spec:
-  nodeSelector:
-    kubernetes.io/arch: arm64
-    cluster: rasp1
-  containers:
-    - name: localization-api
-      image: wrathchild14/localization-reg:latest
-      resizePolicy:
-        - resourceName: cpu
-          restartPolicy: NotRequired
-        - resourceName: memory
-          restartPolicy: NotRequired
-      resources:
-        limits:
-          cpu: "500m"
-          memory: 2Gi
-      ports:
-        - containerPort: 8000
+  replicas: 1
+  selector:
+    matchLabels:
+      app: localization-api
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: localization-api
+        version: v1
+        workload: knn
+    spec:
+      nodeSelector:
+        kubernetes.io/arch: arm64
+        cluster: rasp1
+      containers:
+        - name: localization-api
+          image: wrathchild14/localization-reg:latest
+          resizePolicy:
+            - resourceName: cpu
+              restartPolicy: NotRequired
+            - resourceName: memory
+              restartPolicy: NotRequired
+          resources:
+            requests:
+              cpu: "200m"
+              memory: 256Mi
+            limits:
+              cpu: "2000m"
+              memory: 2Gi
+          ports:
+            - containerPort: 8000
+          volumeMounts:
+            - name: code
+              mountPath: /app/regressor.py
+              subPath: regressor.py
+      volumes:
+        - name: code
+          configMap:
+            name: localization-code
 
 ---
 
-apiVersion: v1
-kind: Pod
+apiVersion: apps/v1
+kind: Deployment
 metadata:
-  name: localization-api2
+  name: predictor-api1
   labels:
     app: localization-api
     version: v2
+    workload: gbr
 spec:
-  nodeSelector:
-    kubernetes.io/arch: arm64
-    cluster: rasp2
-  containers:
-    - name: localization-api
-      image: wrathchild14/localization-reg:latest
-      resizePolicy:
-        - resourceName: cpu
-          restartPolicy: NotRequired
-        - resourceName: memory
-          restartPolicy: NotRequired
-      resources:
-        limits:
-          cpu: "500m"
-          memory: 2Gi
-      ports:
-        - containerPort: 8000
-
----
-
-apiVersion: v1
-kind: Pod
-metadata:
-  name: localization-api3
-  labels:
-    app: localization-api
-    version: v3
-spec:
-  nodeSelector:
-    kubernetes.io/arch: arm64
-    cluster: rasp1
-  containers:
-    - name: localization-api
-      image: wrathchild14/localization-reg:latest
-      resizePolicy:
-        - resourceName: cpu
-          restartPolicy: NotRequired
-        - resourceName: memory
-          restartPolicy: NotRequired
-      resources:
-        limits:
-          cpu: "500m"
-          memory: 2Gi
-      ports:
-        - containerPort: 8000
+  replicas: 1
+  selector:
+    matchLabels:
+      app: localization-api
+      version: v2
+  template:
+    metadata:
+      labels:
+        app: localization-api
+        version: v2
+        workload: gbr
+    spec:
+      nodeSelector:
+        kubernetes.io/arch: arm64
+        cluster: rasp2
+      containers:
+        - name: localization-api
+          image: wrathchild14/localization-reg:latest
+          resizePolicy:
+            - resourceName: cpu
+              restartPolicy: NotRequired
+            - resourceName: memory
+              restartPolicy: NotRequired
+          resources:
+            requests:
+              cpu: "200m"
+              memory: 256Mi
+            limits:
+              cpu: "2000m"
+              memory: 2Gi
+          ports:
+            - containerPort: 8000
+          volumeMounts:
+            - name: code
+              mountPath: /app/regressor.py
+              subPath: regressor.py
+      volumes:
+        - name: code
+          configMap:
+            name: predictor-code
 
 ---
 
@@ -100,7 +120,7 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: localization-service2
+  name: predictor-service1
 spec:
   type: ClusterIP
   ports:
@@ -112,28 +132,19 @@ spec:
 
 ---
 
-apiVersion: v1
-kind: Service
-metadata:
-  name: localization-service3
-spec:
-  type: ClusterIP
-  ports:
-    - port: 8083
-      targetPort: 8000
-  selector:
-    app: localization-api
-    version: v3
-
----
-
-# All this stuff to rewrite /api1, /api2, /api3 to / and keep the /predict...
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: localization-ingress
   annotations:
     nginx.ingress.kubernetes.io/rewrite-target: /$1
+    nginx.ingress.kubernetes.io/proxy-next-upstream: "error timeout http_502 http_503 http_504"
+    nginx.ingress.kubernetes.io/proxy-next-upstream-tries: "3"
+    nginx.ingress.kubernetes.io/proxy-next-upstream-timeout: "10"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "5"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "30"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "30"
+    nginx.ingress.kubernetes.io/upstream-keepalive-connections: "100"
 spec:
   ingressClassName: nginx
   rules:
@@ -151,13 +162,6 @@ spec:
         path: /api2/(.*)
         backend:
           service:
-            name: localization-service2
+            name: predictor-service1
             port:
               number: 8082
-      - pathType: ImplementationSpecific
-        path: /api3/(.*)
-        backend:
-          service:
-            name: localization-service3
-            port:
-              number: 8083

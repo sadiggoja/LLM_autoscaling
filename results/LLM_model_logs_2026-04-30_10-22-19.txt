@@ -1,0 +1,34 @@
+LLM Benchmark Log — 2026-04-30T10:22:19.497186
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+  Phase: low  10 RPS  60 steps
+────────────────────────────────────────────────────────────────────────────────
+  step=  1  pod=localization-api1  5862ms  [parser]  raw_text='scale_cpu(50)'  → action=[1. 0.]
+  step=  2  pod=localization-api1  1126ms  [parser]  raw_text='scale_cpu(50m)'  → action=[1. 0.]
+  step=  3  pod=localization-api1  1261ms  [parser]  raw_text='scale_cpu(100)'  → action=[1. 0.]
+  step=  4  pod=localization-api1  1322ms  [parser]  raw_text='scale_cpu(100m)'  → action=[1. 0.]
+  step=  5  pod=localization-api1  1473ms  [parser]  raw_text='scale_cpu(100m)'  → action=[1. 0.]
+  step=  6  pod=localization-api1  1439ms  [parser]  raw_text='scale_cpu(-50m)'  → action=[-1.  0.]
+  step=  7  pod=localization-api1  1486ms  [parser]  raw_text='scale_cpu(100m)'  → action=[1. 0.]
+  step=  8  pod=localization-api1  1436ms  [parser]  raw_text='scale_cpu(-50m)'  → action=[-1.  0.]
+  step=  9  pod=localization-api1  1259ms  [parser]  raw_text='no_action()'  → action=[0. 0.]
+  step= 10  pod=localization-api1  1377ms  [parser]  raw_text='scale_cpu(50)'  → action=[1. 0.]
+  step= 11  pod=localization-api1  871ms  [parser]  raw_text='scale_cpu(50m)'  → action=[1. 0.]
+  step= 12  pod=localization-api1  1250ms  [parser]  raw_text='no_action()'  → action=[0. 0.]
+  step= 13  pod=localization-api1  1440ms  [parser]  raw_text='scale_cpu(50m)'  → action=[1. 0.]
+  step= 14  pod=localization-api1  1388ms  [parser]  raw_text='scale_cpu(50)'  → action=[1. 0.]
+  step= 15  pod=localization-api1  1444ms  [parser]  raw_text='scale_cpu(100)'  → action=[1. 0.]
+  step= 16  pod=localization-api1  1462ms  [parser]  raw_text='scale_cpu(-50m)'  → action=[-1.  0.]
+  step= 17  pod=localization-api1  8007ms  [parser]  raw_text="Given the current CPU utilization of 2.5%, which is significantly below our target range of 30-60%, and considering that there are no recent request rate estimates indicating an increase in demand, it's reasonable to assume that scaling up would not be immediately necessary.  However, since we have a history of scaling actions (including increases), let's consider the following:  1. The current CPU utilization is well below our target range. 2. There are available shared resources. 3. We should aim to gradually increase usage towards our target while minimizing frequent changes.  Based on this analysis, it makes sense to scale up by a small amount, as we have previously scaled up and there's room for adjustment without over-provisioning.  scale_cpu(50)"  → action=[1. 0.]
+  step= 18  pod=localization-api1  1264ms  [parser]  raw_text='no_action()'  → action=[0. 0.]
+  step= 19  pod=localization-api1  1449ms  [parser]  raw_text='scale_cpu(50m)'  → action=[1. 0.]
+  step= 20  pod=localization-api1  1308ms  [parser]  raw_text='scale_cpu(50m)'  → action=[1. 0.]
+  step= 21  pod=localization-api1  1458ms  [parser]  raw_text='scale_cpu(100)'  → action=[1. 0.]
+  step= 22  pod=localization-api1  1462ms  [parser]  raw_text='scale_cpu(-50m)'  → action=[-1.  0.]
+  step= 23  pod=localization-api1  1120ms  [parser]  raw_text='no_action()'  → action=[0. 0.]
+  step= 24  pod=localization-api1  1286ms  [parser]  raw_text='no_action()'  → action=[0. 0.]
+  step= 25  pod=localization-api1  862ms  [parser]  raw_text='scale_cpu(50m)'  → action=[1. 0.]
+  step= 26  pod=localization-api1  1502ms  [parser]  raw_text='scale_cpu(100m)'  → action=[1. 0.]
+  step= 27  pod=localization-api1  1306ms  [parser]  raw_text='scale_cpu(-50m)'  → action=[-1.  0.]
+  step= 28  pod=localization-api1  1463ms  [parser]  raw_text='scale_cpu(50m)'  → action=[1. 0.]

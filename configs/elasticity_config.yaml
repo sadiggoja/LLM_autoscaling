@@ -1,14 +1,27 @@
-debug_deployment: false
+debug_deployment: true
 target_app_label: "app=localization-api"
 target_container_name: "localization-api"
-max_cpu: 1000
+
+# Heterogeneous service roster. The benchmark assigns agent_id `i` to
+# `service_deployments[i-1]` so deployment/pod names can be explicit per
+# workload (e.g. localization-api1 = KNN regressor, predictor-api1 = GBR).
+# If the list is shorter than the requested agent count, the helper falls
+# back to the legacy `localization-api{i}` naming.
+service_deployments:
+  - localization-api1
+  - predictor-api1
+max_cpu: 500
 min_cpu: 50
 upper_cpu: 60
 lower_cpu: 30
-action_interval: 1
+action_interval: 4
 max_steps: 60
 scale_action: 50
 discrete_increment: 25
+# Patch-debounce: only call patch_pod after the agent's accumulated desired
+# delta crosses this many millicores. Reduces ingress 503s caused by frequent
+# pod-update events. Set 0 to patch on every step.
+min_patch_delta: 100
 state_history: 6
 
 # Joint HPA+VPA settings
@@ -17,3 +30,13 @@ min_replicas: 1
 hpa_cooldown_steps: 30
 target_deployment: "localization-api"
 replica_change_penalty: 0.3
+
+# Threshold agent: response-time-based VPA override. When observed rt > rt_high_s
+# for rt_high_window consecutive steps, force scale-up regardless of cpu_percentage
+# (which is unreliable under 503 storms — nginx-ingress sheds traffic before it
+# reaches the pod, so pod CPU stays artificially low).
+threshold_rt:
+  rt_high_s: 0.5
+  rt_high_window: 3
+  rt_low_s: 0.2
+  rt_low_window: 5

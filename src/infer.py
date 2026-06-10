@@ -30,7 +30,7 @@ def initialize_agent(id=None, resources=1000, tl_agent=None, model=None, algorit
     :param pod_name: The name of the pod
     :return: The environment and the agent
     '''
-    if not model:
+    if not model and algorithm not in ('llm_claude', 'llm_llama', 'llm_ollama'):
         raise ValueError("Please provide a model to load")
     
     match algorithm:
@@ -54,7 +54,7 @@ def initialize_agent(id=None, resources=1000, tl_agent=None, model=None, algorit
             instant = False
             discrete = True
             joint = True
-        case 'llm_claude' | 'llm_llama':
+        case 'llm_claude' | 'llm_llama' | 'llm_ollama':
             instant = False
             discrete = False
             joint = True
@@ -62,22 +62,26 @@ def initialize_agent(id=None, resources=1000, tl_agent=None, model=None, algorit
             raise ValueError("Invalid algorithm")
 
     # LLM agents use joint continuous envs
-    if algorithm in ('llm_claude', 'llm_llama'):
+    if algorithm in ('llm_claude', 'llm_llama', 'llm_ollama'):
         env = JointContinuousElasticityEnv(id, independent_state=independent, pod_name=pod_name)
         llm_config = load_llm_config()
-        deployment_name = llm_config.get('agent', {}).get('deployment_name', 'localization-api')
-        history_window = llm_config.get('agent', {}).get('history_window', 5)
+        agent_cfg = llm_config.get('agent', {})
+        deployment_name = agent_cfg.get('deployment_name', 'localization-api')
+        history_window = agent_cfg.get('history_window', 5)
+        inference_mode = agent_cfg.get('inference_mode', 'function_calling')
         if algorithm == 'llm_claude':
             cfg = llm_config.get('anthropic', {})
             provider = AnthropicProvider(model=cfg.get('model', 'claude-sonnet-4-20250514'),
                                         max_tokens=cfg.get('max_tokens', 512))
         else:
             cfg = llm_config.get('ollama', {})
-            provider = OllamaProvider(model=cfg.get('model', 'llama3.1:8b'),
-                                      base_url=cfg.get('base_url', 'http://localhost:11434'),
+            provider = OllamaProvider(model=cfg.get('model', 'mistral:latest'),
+                                      base_url=cfg.get('base_url', 'https://kinda-beads-prostate-cancel.trycloudflare.com'),
                                       max_tokens=cfg.get('max_tokens', 512))
-        agent = LLMAgent(provider, pod_name=pod_name or f'localization-api{id}',
-                         deployment_name=deployment_name, history_window=history_window)
+        from utils import get_deployment_name
+        agent = LLMAgent(provider, pod_name=pod_name or get_deployment_name(id),
+                         deployment_name=deployment_name, history_window=history_window,
+                         inference_mode=inference_mode)
     else:
         if joint:
             if discrete:
@@ -116,55 +120,83 @@ def initialize_agent(id=None, resources=1000, tl_agent=None, model=None, algorit
 
 def initialize_agents(n_agents=3, resources=1000, tl_agent=None, model=None, algorithm='ppo', independent=False,
                       priorities=[1.0, 1.0, 1.0], scale_action=None, five=False, eleven=False):
-    if not model:
+    # LLM agents don't need a model file
+    is_llm = algorithm in ('llm_claude', 'llm_llama', 'llm_ollama')
+    if not model and not is_llm:
         raise ValueError("Please provide a model to load")
-    
-    match algorithm:
-        case 'ppo' | 'ddpg':
-            instant = False
-            discrete = False
-        case 'ippo' | 'iddpg':
-            instant = True
-            discrete = False
-        case 'mdqn' | 'dmdqn' | 'ddmdqn' | 'dppo':
-            instant = False
-            discrete = True
-        case _:
-            raise ValueError("Invalid algorithm")
 
-    if discrete:
-        if five:
-            envs = [FiveDiscreteElasticityEnv(i, independent_state=independent) for i in range(1, n_agents + 1)]
-        elif eleven:
-            envs = [ElevenDiscrElasticityEnv(i, independent_state=independent) for i in range(1, n_agents + 1)]
-        else:
-            envs = [DiscreteElasticityEnv(i, independent_state=independent) for i in range(1, n_agents + 1)]
+    if is_llm:
+        # LLM path: each agent gets its own JointContinuousElasticityEnv + LLMAgent
+        llm_config = load_llm_config()
+        agent_cfg = llm_config.get('agent', {})
+        deployment_name = agent_cfg.get('deployment_name', 'localization-api')
+        history_window = agent_cfg.get('history_window', 5)
+        inference_mode = agent_cfg.get('inference_mode', 'function_calling')
+
+        envs = [JointContinuousElasticityEnv(i, independent_state=independent) for i in range(1, n_agents + 1)]
+        agents = []
+        for i in range(1, n_agents + 1):
+            if algorithm == 'llm_claude':
+                cfg = llm_config.get('anthropic', {})
+                provider = AnthropicProvider(model=cfg.get('model', 'claude-sonnet-4-20250514'),
+                                            max_tokens=cfg.get('max_tokens', 512))
+            else:
+                cfg = llm_config.get('ollama', {})
+                provider = OllamaProvider(model=cfg.get('model', 'mistral:latest'),
+                                          base_url=cfg.get('base_url', 'https://kinda-beads-prostate-cancel.trycloudflare.com'),
+                                          max_tokens=cfg.get('max_tokens', 512))
+            pod_name = f'{deployment_name}{i}'
+            agent = LLMAgent(provider, pod_name=pod_name,
+                             deployment_name=deployment_name, history_window=history_window,
+                             inference_mode=inference_mode)
+            agents.append(agent)
     else:
-        if instant:
-            envs = [InstantContinuousElasticityEnv(i, independent_state=independent) for i in range(1, n_agents + 1)]
-        else:
-            envs = [ContinuousElasticityEnv(i, independent_state=independent) for i in range(1, n_agents + 1)]
+        match algorithm:
+            case 'ppo' | 'ddpg':
+                instant = False
+                discrete = False
+            case 'ippo' | 'iddpg':
+                instant = True
+                discrete = False
+            case 'mdqn' | 'dmdqn' | 'ddmdqn' | 'dppo':
+                instant = False
+                discrete = True
+            case _:
+                raise ValueError("Invalid algorithm")
 
-    match algorithm:
-        case 'ppo' | 'dppo' | 'ippo':
-            agents = [PPO(env, has_continuous_action_space=not discrete, action_std_init=1e-10, sigmoid_output=instant)
-                      for env in envs]
-        case 'mdqn' | 'dmdqn':
-            agents = [DQNAgent(env) for env in envs]
-        case 'ddmdqn':
-            agents = [DQNAgent(env, dueling=True) for env in envs]
-        case 'ddpg' | 'iddpg':
-            agents = [DDPGagent(env, hidden_size=64, sigmoid_output=instant) for env in envs]
-
-    for agent_id, agent in enumerate(agents):
-        if isinstance(tl_agent, int):
-            agent.load(model, agent_id=tl_agent)
+        if discrete:
+            if five:
+                envs = [FiveDiscreteElasticityEnv(i, independent_state=independent) for i in range(1, n_agents + 1)]
+            elif eleven:
+                envs = [ElevenDiscrElasticityEnv(i, independent_state=independent) for i in range(1, n_agents + 1)]
+            else:
+                envs = [DiscreteElasticityEnv(i, independent_state=independent) for i in range(1, n_agents + 1)]
         else:
-            agent.load(model, agent_id=agent_id)
+            if instant:
+                envs = [InstantContinuousElasticityEnv(i, independent_state=independent) for i in range(1, n_agents + 1)]
+            else:
+                envs = [ContinuousElasticityEnv(i, independent_state=independent) for i in range(1, n_agents + 1)]
+
+        match algorithm:
+            case 'ppo' | 'dppo' | 'ippo':
+                agents = [PPO(env, has_continuous_action_space=not discrete, action_std_init=1e-10, sigmoid_output=instant)
+                          for env in envs]
+            case 'mdqn' | 'dmdqn':
+                agents = [DQNAgent(env) for env in envs]
+            case 'ddmdqn':
+                agents = [DQNAgent(env, dueling=True) for env in envs]
+            case 'ddpg' | 'iddpg':
+                agents = [DDPGagent(env, hidden_size=64, sigmoid_output=instant) for env in envs]
+
+        for agent_id, agent in enumerate(agents):
+            if isinstance(tl_agent, int):
+                agent.load(model, agent_id=tl_agent)
+            else:
+                agent.load(model, agent_id=agent_id)
 
     for i, env in enumerate(envs):
         env.MAX_CPU_LIMIT = resources
-        env.priority = priorities[i]
+        env.priority = priorities[i] if i < len(priorities) else 1.0
         if scale_action:
             env.scale_action = scale_action
 
@@ -212,14 +244,15 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--n_agents', type=int, default=3)
     parser.add_argument('--resources', type=int, default=1000)
-    parser.add_argument('--load_model', type=str,
-                        default='trained/ppo/1000ep_rf_2_20rps10kepochs5alpha10epupdate50scale_a_1000resources')  # Default trained weights for ppo model
+    parser.add_argument('--load_model', type=str, default=None,
+                        help='Path to trained model weights (required for RL algorithms, ignored for LLM algorithms)')
     parser.add_argument('--action_interval', type=float, default=5.0)
     parser.add_argument('--priorities', type=float, nargs='+', default=[1.0, 1.0, 1.0, 1.0],
                         help='List of priorities (0.0 < value <= 1.0), default is 1.0 for all agents. Example: 1.0 1.0 1.0')
 
     parser.add_argument('--algorithm', type=str, default='ppo',
-                        help='Algorithm to use: ppo, ippo (instant ppo), dppo (discrete ppo), ddpg, iddpg (instant ddpg), mdqn, dmdqn, ddmdqn')
+                        help='Algorithm to use: ppo, ippo, dppo, ddpg, iddpg, mdqn, dmdqn, ddmdqn, '
+                             'llm_claude, llm_llama, llm_ollama')
 
     parser.add_argument('--hack', type=int, default=None,
                         help='Transfer learning agent, so every agent will loaded from this agent saved weights')
@@ -229,8 +262,13 @@ if __name__ == '__main__':
     parser.add_argument('--debug', action='store_true')
     args = parser.parse_args()
 
+    # For RL algorithms, default to a PPO model path if none provided
+    model = args.load_model
+    if model is None and args.algorithm not in ('llm_claude', 'llm_llama', 'llm_ollama'):
+        model = 'trained/ppo/1000ep_rf_2_20rps10kepochs5alpha10epupdate50scale_a_1000resources'
+
     envs, agents = initialize_agents(n_agents=args.n_agents, algorithm=args.algorithm, tl_agent=args.hack,
-                                     model=args.load_model, priorities=args.priorities, resources=args.resources,
+                                     model=model, priorities=args.priorities, resources=args.resources,
                                      scale_action=args.scale_action)
 
     infer(agents=agents, envs=envs, resources=args.resources, debug=args.debug, action_interval=args.action_interval)
