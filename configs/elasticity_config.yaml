@@ -2,14 +2,15 @@ debug_deployment: true
 target_app_label: "app=localization-api"
 target_container_name: "localization-api"
 
-# Heterogeneous service roster. The benchmark assigns agent_id `i` to
-# `service_deployments[i-1]` so deployment/pod names can be explicit per
-# workload (e.g. localization-api1 = KNN regressor, predictor-api1 = GBR).
-# If the list is shorter than the requested agent count, the helper falls
-# back to the legacy `localization-api{i}` naming.
-service_deployments:
-  - localization-api1
-  - predictor-api1
+# Optional: explicit per-agent deployment names. When unset (default), the
+# benchmark uses the legacy convention `localization-api{i}` for agent_id i.
+# Set this list only if you want different deployment names per agent (e.g.
+# for multi-service / heterogeneous experiments).
+#
+# service_deployments:
+#   - localization-api1
+#   - localization-api2
+
 max_cpu: 500
 min_cpu: 50
 upper_cpu: 60

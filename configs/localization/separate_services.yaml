@@ -5,7 +5,6 @@ metadata:
   labels:
     app: localization-api
     version: v1
-    workload: knn
 spec:
   replicas: 1
   selector:
@@ -17,7 +16,6 @@ spec:
       labels:
         app: localization-api
         version: v1
-        workload: knn
     spec:
       nodeSelector:
         kubernetes.io/arch: arm64
@@ -39,25 +37,16 @@ spec:
               memory: 2Gi
           ports:
             - containerPort: 8000
-          volumeMounts:
-            - name: code
-              mountPath: /app/regressor.py
-              subPath: regressor.py
-      volumes:
-        - name: code
-          configMap:
-            name: localization-code
 
 ---
 
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: predictor-api1
+  name: localization-api2
   labels:
     app: localization-api
     version: v2
-    workload: gbr
 spec:
   replicas: 1
   selector:
@@ -69,7 +58,6 @@ spec:
       labels:
         app: localization-api
         version: v2
-        workload: gbr
     spec:
       nodeSelector:
         kubernetes.io/arch: arm64
@@ -91,14 +79,6 @@ spec:
               memory: 2Gi
           ports:
             - containerPort: 8000
-          volumeMounts:
-            - name: code
-              mountPath: /app/regressor.py
-              subPath: regressor.py
-      volumes:
-        - name: code
-          configMap:
-            name: predictor-code
 
 ---
 
@@ -120,7 +100,7 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: predictor-service1
+  name: localization-service2
 spec:
   type: ClusterIP
   ports:
@@ -162,6 +142,6 @@ spec:
         path: /api2/(.*)
         backend:
           service:
-            name: predictor-service1
+            name: localization-service2
             port:
               number: 8082
